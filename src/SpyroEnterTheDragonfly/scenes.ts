@@ -77,7 +77,7 @@ class SpyroETDScene implements SceneDesc {
 
 const GEOMS = ["L_1_DD/363_552369DA.GEOM", "L_1_DD/341_5099EFC2.GEOM", "L_1_DD/1000_D99EE769.GEOM", "L_1_DD/1086_E9F4D33D.GEOM", "L_1_DD/644_8DDAE922.GEOM",
     "L_1_DD/983_D72304FD.GEOM", "L_1_DD/679_95446F7E.GEOM", "L_1_DD/488_70168DFD.GEOM", "L_1_DD/703_9A82F879.GEOM", "L_1_DD/624_88EBE657.GEOM",
-    "L_1_DD/335_4F8E7812.GEOM"
+    "L_1_DD/335_4F8E7812.GEOM", "T_1_DD/19_51C32784.GEOM"
 ];
 
 const id = "SpyroETD";
@@ -98,6 +98,8 @@ const sceneDescs = [
     new SpyroETDScene(30, [0, 3, 9], "DD 0+3+9"),
     new SpyroETDScene(31, [2, 4], "DD 2+4"),
     new SpyroETDScene(32, [5, 6], "DD 5+6"),
+    "Transition - Dragonfly Dojo",
+    new SpyroETDScene(50, [11], "T 1 DD"),
 ];
 
 export const sceneGroup: SceneGroup = { id, name, sceneDescs };

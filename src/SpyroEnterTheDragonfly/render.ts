@@ -37,9 +37,9 @@ void main() {
 
 #ifdef FRAG
 void main() {
-    // gl_FragColor = vec4(v_Color, 1.0);
-    vec3 normal = normalize(cross(dFdx(v_Pos), dFdy(v_Pos)));
-    gl_FragColor = vec4(max((normal * 0.5 + 0.5) * 0.8, vec3(0.2)), 1.0);
+    gl_FragColor = vec4(v_Color, 1.0);
+    // vec3 normal = normalize(cross(dFdx(v_Pos), dFdy(v_Pos)));
+    // gl_FragColor = vec4(max((normal * 0.5 + 0.5) * 0.8, vec3(0.2)), 1.0);
 }
 #endif
     `;

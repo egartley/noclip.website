@@ -392,6 +392,7 @@ class GeometryChunk {
         reader.skip(2);
 
         this.colorCount = reader.u8();
+        reader.skip(1);
         this.colors = [];
         for (let i = 0; i < this.colorCount; i++) {
             const r = reader.u8();
