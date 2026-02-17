@@ -29,7 +29,7 @@ abstract class Chunk {
     public name: string;
     public common: number;
 
-    constructor(reader: MRBReader) {
+    constructor(reader: BinaryReader) {
         this.instanceId = reader.u32();
         this.name = reader.alignedString();
         reader.skip(4);
@@ -37,7 +37,7 @@ abstract class Chunk {
         this.parseData(reader);
     }
 
-    protected abstract parseData(reader: MRBReader): void;
+    protected abstract parseData(reader: BinaryReader): void;
 }
 
 export class MeshChunk extends Chunk {
@@ -45,7 +45,7 @@ export class MeshChunk extends Chunk {
     subData: number[];
     indices: number[];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.vertices = [];
         this.subData = [];
         this.indices = [];
@@ -62,7 +62,7 @@ class ObjectChunk extends Chunk {
     rawHeader: Uint8Array;
     points: number[] = [];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.points = [];
         this.rawHeader = reader.bytes(122);
         for (let i = 0; i < 4; i++) {
@@ -77,7 +77,7 @@ class ObjectShapeChunk extends Chunk {
     data2: Uint8Array;
     textureGroupId: number;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.data = reader.bytes(40);
         this.data = reader.bytes(44);
         this.textureGroupId = reader.u32();
@@ -87,7 +87,7 @@ class ObjectShapeChunk extends Chunk {
 class MaterialChunk extends Chunk {
     data: Uint8Array;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.data = reader.bytes(110);
     }
 }
@@ -97,7 +97,7 @@ class TextureChunk extends Chunk {
     pxtName: string;
     data2: Uint8Array;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.data = reader.bytes(63);
         this.pxtName = reader.alignedString();
         this.data2 = reader.bytes(97);
@@ -108,7 +108,7 @@ class PropertyChunk extends Chunk {
     data: Uint8Array;
     footer: Uint8Array;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         const start = reader.getOffset();
         while (!reader.isPropEnd()) { reader.skip(1); }
         const end = reader.getOffset();
@@ -125,7 +125,7 @@ class EffectChunk extends Chunk {
     public data4: number[] = [];
     public data5: number[] = [];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         reader.skip(4);
         const count = reader.u32();
         this.clipId = reader.u32();
@@ -143,7 +143,7 @@ class ClipChunk extends Chunk {
     data3: number[] = [];
     data4: Uint8Array;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         const count = reader.u8();
         this.data = reader.bytes(3);
         for (let i = 0; i < count; i++) this.data2.push(reader.u32());
@@ -156,7 +156,7 @@ class TextureGroupChunk extends Chunk {
     public textureRefs: { prefix: Uint8Array, textureId: number, suffix: Uint8Array }[] = [];
     public finalTextureId: number = 0;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.textureRefs = [];
         reader.skip(88); // data[88]
         const count = reader.u32();
@@ -175,7 +175,7 @@ class TextureGroupChunk extends Chunk {
 class SpecularEnvChunk extends Chunk {
     public subData: number[] = [];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.subData = [];
         reader.skip(110); // data[110]
         const count = reader.u32();
@@ -189,7 +189,7 @@ class SpecularEnvChunk extends Chunk {
 class BlendChunk extends Chunk {
     public values: number[] = [];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         reader.skip(10); // data[10]
         const count = reader.u32();
         for (let i = 0; i < count; i++) {
@@ -201,7 +201,7 @@ class BlendChunk extends Chunk {
 class ParticleShapeChunk extends Chunk {
     public subData: Uint8Array[] = [];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         reader.skip(136); // data[136]
         const count = reader.u32();
         if (count > 0) {
@@ -216,7 +216,7 @@ class ParticleShapeChunk extends Chunk {
 class ClusterShapeChunk extends Chunk {
     public textureGroupId: number = 0;
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         reader.skip(84); // data[84]
         this.textureGroupId = reader.u32();
     }
@@ -225,27 +225,27 @@ class ClusterShapeChunk extends Chunk {
 class Shape5Chunk extends Chunk {
     public pos: { x: number, y: number, z: number };
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         reader.skip(64); // data[64]
         this.pos = { x: reader.f32(), y: reader.f32(), z: reader.f32() };
         reader.skip(76); // data2[76]
     }
 }
 
-class Unknown1Chunk extends Chunk { protected parseData(r: MRBReader) { r.skip(112); } }
-class Unknown2Chunk extends Chunk { protected parseData(r: MRBReader) { r.skip(32); } }
-class Unknown3Chunk extends Chunk { protected parseData(r: MRBReader) { r.skip(88); } }
-class Shape2Chunk extends Chunk { protected parseData(r: MRBReader) { r.skip(92); } }
-class Shape3Chunk extends Chunk { protected parseData(r: MRBReader) { r.skip(88); } }
-class Shape4Chunk extends Chunk { protected parseData(r: MRBReader) { r.skip(170); } }
-class ParticleChunk extends Chunk { protected parseData(r: MRBReader) { r.skip(182); } }
+class Unknown1Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(112); } }
+class Unknown2Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(32); } }
+class Unknown3Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(88); } }
+class Shape2Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(92); } }
+class Shape3Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(88); } }
+class Shape4Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(170); } }
+class ParticleChunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(182); } }
 
 class ClusterChunk extends Chunk {
     public shapeId: number = 0;
     public vertices: { x: number, y: number, z: number }[] = [];
     public weights: number[] = [];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.shapeId = reader.u32();
         reader.skip(6); // data2
         const vertexCount = reader.u32();
@@ -273,7 +273,7 @@ class ClusterChunk extends Chunk {
 class AttributeChunk extends Chunk {
     public subData: number[];
 
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         this.subData = [];
         reader.skip(9);
         const count = reader.u32();
@@ -285,21 +285,19 @@ class AttributeChunk extends Chunk {
 }
 
 class UnknownChunk extends Chunk {
-    constructor(reader: MRBReader, public typeId: number) {
+    constructor(reader: BinaryReader, public typeId: number) {
         super(reader);
     }
-    protected parseData(reader: MRBReader): void {
+    protected parseData(reader: BinaryReader): void {
         console.warn(`Unknown Chunk Type: ${this.typeId} at ${reader.getOffset()}`);
     }
 }
 
-class MRBReader {
+class BinaryReader {
     private offset: number = 0;
     private decoder = new TextDecoder();
 
-    constructor(private data: DataView) {
-
-    }
+    constructor(private data: DataView) { }
 
     getOffset() { return this.offset; }
     skip(n: number) { this.offset += n; }
@@ -336,12 +334,108 @@ class MRBReader {
     }
 }
 
+class GeometryChunk {
+    type: number;
+    type2: number;
+    vertexCount: number;
+    normalCount: number;
+    unknownCount: number;
+    realVertexCount: number;
+    stripLengths: number[];
+    colorCount: number;
+    uvCount: number;
+    vertices: number[];
+    normals: number[];
+    uvs: number[];
+    colors: number[];
+
+    constructor(reader: BinaryReader) {
+        reader.skip(3);
+        this.type = reader.u8();
+        while (reader.u8() !== 32) { }
+        reader.skip(6);
+
+        this.vertexCount = reader.u8();
+        reader.skip(1);
+        this.vertices = [];
+        for (let i = 0; i < this.vertexCount; i++) {
+            const x = reader.f32();
+            const y = reader.f32();
+            const z = reader.f32();
+            this.vertices.push(x, y, z);
+        }
+        reader.skip(14);
+
+        this.normalCount = reader.u8();
+        reader.skip(1);
+        this.normals = [];
+        for (let i = 0; i < this.normalCount; i++) {
+            const x = reader.u16();
+            const y = reader.u16();
+            const z = reader.u16();
+            this.normals.push(x, y, z);
+        }
+        reader.skip(12);
+        const check = reader.u16();
+        if (check === 952) {
+            const uc2 = reader.u8();
+            reader.skip(1);
+            reader.skip(16 * uc2);
+            reader.skip(14);
+        }
+
+        this.unknownCount = reader.u8();
+        reader.skip(1);
+        this.realVertexCount = reader.u8();
+        this.stripLengths = [];
+        this.stripLengths.push(...reader.bytes(43));
+        reader.skip(2);
+
+        this.colorCount = reader.u8();
+        this.colors = [];
+        for (let i = 0; i < this.colorCount; i++) {
+            const r = reader.u8();
+            const g = reader.u8();
+            const b = reader.u8();
+            reader.skip(1);
+            this.colors.push(r, g, b);
+        }
+        reader.skip(15);
+
+        this.uvCount = reader.u8();
+        reader.skip(1);
+        this.uvs = [];
+        for (let i = 0; i < this.uvCount; i++) {
+            const u = reader.f32();
+            const v = reader.f32();
+            this.uvs.push(u, v);
+        }
+        reader.skip(15);
+
+        this.type2 = reader.u8();
+    }
+}
+
+export class GeometryFile {
+    public chunks: GeometryChunk[];
+
+    constructor(data: DataView) {
+        const reader = new BinaryReader(data);
+        reader.skip(16);
+        this.chunks = [];
+        while (reader.getOffset() < data.byteLength) {
+            const chunk = new GeometryChunk(reader);
+            this.chunks.push(chunk);
+        }
+    }
+}
+
 export class MRB {
     fileName: string = "";
     chunks: Chunk[] = [];
 
     constructor(data: DataView) {
-        const reader = new MRBReader(data);
+        const reader = new BinaryReader(data);
         const nameLen = reader.u32();
         if (nameLen > 0) {
             this.fileName = new TextDecoder().decode(reader.bytes(nameLen));
