@@ -6,7 +6,7 @@ import { LevelRenderer } from "./render.js"
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
-import { GeometryFile, MRB } from "./bin.js";
+import { GeometryFile } from "./bin.js";
 
 export class SpyroETDRenderer implements SceneGfx {
     private renderHelper: GfxRenderHelper;
@@ -56,8 +56,16 @@ const pathBase = "SpyroETD";
 class SpyroETDScene implements SceneDesc {
     public id: string;
 
-    constructor(id: number, public geomIndices: number[], public name: string) {
-        this.id = id.toString();
+    constructor(public geomIndices: number[], public name: string, customId?: string) {
+        if (customId) {
+            this.id = customId;
+        } else {
+            this.id = "";
+            for (const i of geomIndices) {
+                this.id += i.toString() + "_";
+            }
+            this.id = this.id.substring(0, this.id.length - 1);
+        }
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
@@ -69,37 +77,41 @@ class SpyroETDScene implements SceneDesc {
                 geos.push(geo);
             }
         }
-        // const test = await context.dataFetcher.fetchData(`${pathBase}/L_1_DD/448_67E2B89A.MRB`);
-        // const mrb = new MRB(test.createDataView());
         return new SpyroETDRenderer(device, geos);
     }
 }
 
 const GEOMS = ["L_1_DD/363_552369DA.GEOM", "L_1_DD/341_5099EFC2.GEOM", "L_1_DD/1000_D99EE769.GEOM", "L_1_DD/1086_E9F4D33D.GEOM", "L_1_DD/644_8DDAE922.GEOM",
     "L_1_DD/983_D72304FD.GEOM", "L_1_DD/679_95446F7E.GEOM", "L_1_DD/488_70168DFD.GEOM", "L_1_DD/703_9A82F879.GEOM", "L_1_DD/624_88EBE657.GEOM",
-    "L_1_DD/335_4F8E7812.GEOM", "T_1_DD/19_51C32784.GEOM"
+    "L_1_DD/335_4F8E7812.GEOM", "T_1_DD/19_51C32784.GEOM", "T_1_DD/33_9BBF9989.GEOM", "THE_HUB/461_4EB71428.GEOM", "THE_HUB/782_81925A09.GEOM",
+    "THE_HUB/1280_D3437F3D.GEOM", "THE_HUB/1087_B350CDDC.GEOM", "THE_HUB/1399_E53864AA.GEOM", "THE_HUB/336_377E599B.GEOM", "THE_HUB/490_52E69795.GEOM",
+    "THE_HUB/1429_E9A19DF4.GEOM", "T_0_ATLS/41_D8436FD9.GEOM", "T_0_ATLS/29_919A78DB.GEOM", "T_0_HUB/15_6949CAD0.GEOM", "T_0_HUB/26_919A78DB.GEOM",
+    "T_2_CCC/27_863244B5.GEOM", "T_2_CCC/16_5A986E73.GEOM", "L_2_CC/1115_EB96D1D9.GEOM", "L_2_CC/1159_F6C8620B.GEOM", "L_2_CC/286_3DBBE0F5.GEOM",
+    "L_2_CC/420_5A3A4DA1.GEOM", "L_2_CC/853_B7D739DA.GEOM", "L_3_LI/99_1527BFFD.GEOM", "L_3_LI/34_0621944F.GEOM", "L_3_LI/512_69B502A6.GEOM",
+    "L_3_LI/1187_F2A3B9C4.GEOM", "L_3_LI/1107_E350D741.GEOM", "L_3_LI/733_99253B77.GEOM"
 ];
 
 const id = "SpyroETD";
 const name = "Spyro: Enter the Dragonfly";
 const sceneDescs = [
-    "Dragonfly Dojo",
-    new SpyroETDScene(0, [0], "DD 0"),
-    new SpyroETDScene(1, [1], "DD 1"),
-    new SpyroETDScene(2, [2], "DD 2"),
-    new SpyroETDScene(3, [3], "DD 3"),
-    new SpyroETDScene(4, [4], "DD 4"),
-    new SpyroETDScene(5, [5], "DD 5"),
-    new SpyroETDScene(6, [6], "DD 6"),
-    new SpyroETDScene(7, [7], "DD 7"),
-    new SpyroETDScene(8, [8], "DD 8"),
-    new SpyroETDScene(9, [9], "DD 9"),
-    new SpyroETDScene(10, [10], "DD 10"),
-    new SpyroETDScene(30, [0, 3, 9], "DD 0+3+9"),
-    new SpyroETDScene(31, [2, 4], "DD 2+4"),
-    new SpyroETDScene(32, [5, 6], "DD 5+6"),
-    "Transition - Dragonfly Dojo",
-    new SpyroETDScene(50, [11], "T 1 DD"),
+    "Levels",
+    new SpyroETDScene([14, 15, 16, 17, 18, 19, 20], "The Hub", "1000"),
+    new SpyroETDScene([2, 4, 1, 8], "Dragonfly Dojo", "999"),
+    new SpyroETDScene([0, 3, 5, 6, 7, 9], "Dragonfly Dojo 2", "998"),
+    new SpyroETDScene([28, 29, 30, 31], "Crop Circle Country", "997"),
+    new SpyroETDScene([33, 34, 35, 36, 37], "Luau Island", "996"),
+    "Transition 0 (Atlas)",
+    new SpyroETDScene([21], "T0A 1"),
+    new SpyroETDScene([22], "T0A 2"),
+    "Transition 0 (Hub)",
+    new SpyroETDScene([23], "T0H 1"),
+    new SpyroETDScene([24], "T0H 2"),
+    "Transition 1 (Dragonfly Dojo)",
+    new SpyroETDScene([11], "T1DD 1"),
+    new SpyroETDScene([12], "T1DD 2"),
+    "Transition 2 (Crop Circle Country)",
+    new SpyroETDScene([25], "T2CCC 1"),
+    new SpyroETDScene([26], "T2CCC 2"),
 ];
 
 export const sceneGroup: SceneGroup = { id, name, sceneDescs };

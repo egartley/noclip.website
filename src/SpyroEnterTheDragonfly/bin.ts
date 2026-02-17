@@ -314,6 +314,14 @@ class BinaryReader {
         return data;
     }
 
+    peek(n: number) : number[] {
+        const nums = [];
+        for (let i = 0; i < n; i++) {
+            nums.push(this.data.getUint8(this.offset + 1 + i));
+        }
+        return nums;
+    }
+
     slice(start: number, end: number) {
         return new Uint8Array(this.data.buffer.slice(start, end));
     }
@@ -350,10 +358,19 @@ class GeometryChunk {
     colors: number[];
 
     constructor(reader: BinaryReader) {
-        reader.skip(3);
-        this.type = reader.u8();
-        while (reader.u8() !== 32) { }
-        reader.skip(6);
+        let skip = true;
+        while (skip) {
+            skip = false;
+            const nums = reader.peek(7);
+            const signature = [0x20, 0x40, 0x40, 0x40, 0x40, 0x01, 0x80];
+            for (let i = 0; i < nums.length; i++) {
+                if (nums[i] !== signature[i]) {
+                    skip = true;
+                }
+            }
+            reader.skip(1);
+        }
+        reader.skip(7);
 
         this.vertexCount = reader.u8();
         reader.skip(1);
@@ -367,7 +384,7 @@ class GeometryChunk {
         reader.skip(14);
 
         this.normalCount = reader.u8();
-        reader.skip(1);
+        const normalCheck = reader.u8();
         this.normals = [];
         for (let i = 0; i < this.normalCount; i++) {
             const x = reader.u16();
@@ -375,14 +392,22 @@ class GeometryChunk {
             const z = reader.u16();
             this.normals.push(x, y, z);
         }
-        reader.skip(12);
-        const check = reader.u16();
-        if (check === 952) {
-            const uc2 = reader.u8();
-            reader.skip(1);
-            reader.skip(16 * uc2);
-            reader.skip(14);
+        if (normalCheck == 0x78) {
+            reader.skip(6 * this.normalCount);
         }
+        skip = true;
+        while (skip) {
+            skip = false;
+            const nums = reader.peek(7);
+            const signature = [0x20, 0x54, 0x54, 0x54, 0x54, 0xC1, 0x80];
+            for (let i = 0; i < nums.length; i++) {
+                if (nums[i] !== signature[i]) {
+                    skip = true;
+                }
+            }
+            reader.skip(1);
+        }
+        reader.skip(7);
 
         this.unknownCount = reader.u8();
         reader.skip(1);
@@ -401,7 +426,11 @@ class GeometryChunk {
             reader.skip(1);
             this.colors.push(r, g, b);
         }
-        reader.skip(15);
+        if (normalCheck == 0x78) {
+            // skip 3 extra sets of colors
+            reader.skip(3 * this.colorCount * 4);
+        }
+        reader.skip(14);
 
         this.uvCount = reader.u8();
         reader.skip(1);
@@ -422,7 +451,6 @@ export class GeometryFile {
 
     constructor(data: DataView) {
         const reader = new BinaryReader(data);
-        reader.skip(16);
         this.chunks = [];
         while (reader.getOffset() < data.byteLength) {
             const chunk = new GeometryChunk(reader);

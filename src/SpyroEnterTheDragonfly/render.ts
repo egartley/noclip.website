@@ -7,7 +7,7 @@ import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
-import { GeometryFile, MeshChunk, MRB } from "./bin";
+import { GeometryFile } from "./bin";
 
 export class LevelProgram extends DeviceProgram {
     public static ub_SceneParams = 0;
