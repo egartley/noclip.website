@@ -6,14 +6,26 @@ import { LevelRenderer } from "./render.js"
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
-import { GeometryFile } from "./bin.js";
+import { Texture as ViewerTexture } from "../viewer.js";
+import ArrayBufferSlice from "../ArrayBufferSlice.js";
+import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
+import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
+import { GeomFile } from "./bin_geom.js";
+import { buildTextures, PXTFile, Texture } from "./bin_pxt.js";
+import { MRBBundle, MRBFile } from "./bin_mrb.js";
 
 export class SpyroETDRenderer implements SceneGfx {
+    public textureHolder: TextureHolder;
     private renderHelper: GfxRenderHelper;
     private renderInstListMain = new GfxRenderInstList();
     private levelRenderer: LevelRenderer;
 
-    constructor(device: GfxDevice, geos: GeometryFile[]) {
+    constructor(device: GfxDevice, geos: GeomFile[], textures: Texture[]) {
+        const viewerTextures: ViewerTexture[] = [];
+        for (let i = 0; i < textures.length; i++) {
+            viewerTextures.push(convertToViewerTexture(`texture_${i}`, textures[i]));
+        }
+        this.textureHolder = new FakeTextureHolder(viewerTextures);
         this.renderHelper = new GfxRenderHelper(device);
         this.levelRenderer = new LevelRenderer(this.renderHelper.renderCache, geos);
     }
@@ -73,22 +85,39 @@ class SpyroETDScene implements SceneDesc {
         for (let i = 0; i < GEOMS.length; i++) {
             if (this.geomIndices.includes(i)) {
                 const file = await context.dataFetcher.fetchData(`${pathBase}/${GEOMS[i]}`);
-                const geo = new GeometryFile(file.createDataView());
+                const geo = new GeomFile(file.createDataView());
                 geos.push(geo);
             }
         }
-        return new SpyroETDRenderer(device, geos);
+        const pxtFile = await context.dataFetcher.fetchData(`${pathBase}/T_1_DD/bundle.pxt`);
+        const pxt = new PXTFile(pxtFile.createDataView());
+        const mrbFile = await context.dataFetcher.fetchData(`${pathBase}/T_1_DD/bundle.mrb`);
+        const mrb = new MRBBundle(mrbFile.createDataView());
+        const textures = buildTextures(pxt);
+        return new SpyroETDRenderer(device, geos, textures);
     }
 }
 
-const GEOMS = ["L_1_DD/363_552369DA.GEOM", "L_1_DD/341_5099EFC2.GEOM", "L_1_DD/1000_D99EE769.GEOM", "L_1_DD/1086_E9F4D33D.GEOM", "L_1_DD/644_8DDAE922.GEOM",
-    "L_1_DD/983_D72304FD.GEOM", "L_1_DD/679_95446F7E.GEOM", "L_1_DD/488_70168DFD.GEOM", "L_1_DD/703_9A82F879.GEOM", "L_1_DD/624_88EBE657.GEOM",
-    "L_1_DD/335_4F8E7812.GEOM", "T_1_DD/19_51C32784.GEOM", "T_1_DD/33_9BBF9989.GEOM", "THE_HUB/461_4EB71428.GEOM", "THE_HUB/782_81925A09.GEOM",
-    "THE_HUB/1280_D3437F3D.GEOM", "THE_HUB/1087_B350CDDC.GEOM", "THE_HUB/1399_E53864AA.GEOM", "THE_HUB/336_377E599B.GEOM", "THE_HUB/490_52E69795.GEOM",
-    "THE_HUB/1429_E9A19DF4.GEOM", "T_0_ATLS/41_D8436FD9.GEOM", "T_0_ATLS/29_919A78DB.GEOM", "T_0_HUB/15_6949CAD0.GEOM", "T_0_HUB/26_919A78DB.GEOM",
-    "T_2_CCC/27_863244B5.GEOM", "T_2_CCC/16_5A986E73.GEOM", "L_2_CC/1115_EB96D1D9.GEOM", "L_2_CC/1159_F6C8620B.GEOM", "L_2_CC/286_3DBBE0F5.GEOM",
-    "L_2_CC/420_5A3A4DA1.GEOM", "L_2_CC/853_B7D739DA.GEOM", "L_3_LI/99_1527BFFD.GEOM", "L_3_LI/34_0621944F.GEOM", "L_3_LI/512_69B502A6.GEOM",
-    "L_3_LI/1187_F2A3B9C4.GEOM", "L_3_LI/1107_E350D741.GEOM", "L_3_LI/733_99253B77.GEOM"
+function convertToViewerTexture(name: string, texture: Texture): ViewerTexture {
+    const canvas = convertToCanvas(ArrayBufferSlice.fromView(texture.rgba), texture.width, texture.height);
+    canvas.title = name;
+    const extraInfo = new Map<string, string>();
+    extraInfo.set("Bit Depth", texture.bitDepth.toString());
+    return { name, surfaces: [canvas], extraInfo };
+}
+
+const GEOMS = ["L_1_DD/552369DA.geom", "L_1_DD/5099EFC2.geom", "L_1_DD/D99EE769.geom", "L_1_DD/E9F4D33D.geom", "L_1_DD/8DDAE922.geom",
+    "L_1_DD/D72304FD.geom", "L_1_DD/95446F7E.geom", "L_1_DD/70168DFD.geom", "L_1_DD/9A82F879.geom", "L_1_DD/88EBE657.geom",
+    "L_1_DD/4F8E7812.geom", "T_1_DD/51C32784.geom", "T_1_DD/9BBF9989.geom", "THE_HUB/4EB71428.geom", "THE_HUB/81925A09.geom",
+    "THE_HUB/D3437F3D.geom", "THE_HUB/B350CDDC.geom", "THE_HUB/E53864AA.geom", "THE_HUB/377E599B.geom", "THE_HUB/52E69795.geom",
+    "THE_HUB/E9A19DF4.geom", "T_0_ATLS/D8436FD9.geom", "T_0_ATLS/919A78DB.geom", "T_0_HUB/6949CAD0.geom", "T_0_HUB/919A78DB.geom",
+    "T_2_CCC/863244B5.geom", "T_2_CCC/5A986E73.geom", "L_2_CC/EB96D1D9.geom", "L_2_CC/F6C8620B.geom", "L_2_CC/3DBBE0F5.geom",
+    "L_2_CC/5A3A4DA1.geom", "L_2_CC/B7D739DA.geom", "L_3_LI/1527BFFD.geom", "L_3_LI/0621944F.geom", "L_3_LI/69B502A6.geom",
+    "L_3_LI/F2A3B9C4.geom", "L_3_LI/E350D741.geom", "L_3_LI/99253B77.geom", "T_3_LI/CCB1DAF3.geom", "T_3_LI/F427E765.geom", "C_1_INT1/C17DAFFF.geom",
+    "C_1_INT1/791CF82C.geom", "C_2_INT2/B2D436D8.geom", "C_2_INT2/A6DE9BDF.geom", "C_3_MIDG/7EF16F14.geom", "C_3_MIDG/F7197213.geom",
+    "C_4_BOS1/9150A5D0.geom", "C_4_BOS1/E541BB4A.geom", "C_5_BOS2/72ED7362.geom", "C_5_BOS2/3247CE3E.geom", "CREDITS1/5CE245E0.geom",
+    "CREDITS1/12941A31.geom", "CREDITS2/0FB70C66.geom", "CREDITS2/12941A31.geom", "DEMO1/66DF417B.geom", "DEMO2/AE958AE8.geom",
+    "DEMO3/A9137D69.geom", "DEMO4/2855A6EB.geom"
 ];
 
 const id = "SpyroETD";
@@ -100,6 +129,17 @@ const sceneDescs = [
     new SpyroETDScene([0, 3, 5, 6, 7, 9], "Dragonfly Dojo 2", "998"),
     new SpyroETDScene([28, 29, 30, 31], "Crop Circle Country", "997"),
     new SpyroETDScene([33, 34, 35, 36, 37], "Luau Island", "996"),
+    "Cutscenes",
+    new SpyroETDScene([40], "INT1 1"),
+    new SpyroETDScene([41], "INT1 2"),
+    new SpyroETDScene([42], "INT2 1"),
+    new SpyroETDScene([43], "INT2 2"),
+    new SpyroETDScene([44], "MIDG 1"),
+    new SpyroETDScene([45], "MIDG 2"),
+    new SpyroETDScene([46], "BOS1 1"),
+    new SpyroETDScene([47], "BOS1 2"),
+    new SpyroETDScene([48], "BOS2 1"),
+    new SpyroETDScene([49], "BOS2 2"),
     "Transition 0 (Atlas)",
     new SpyroETDScene([21], "T0A 1"),
     new SpyroETDScene([22], "T0A 2"),
@@ -112,6 +152,19 @@ const sceneDescs = [
     "Transition 2 (Crop Circle Country)",
     new SpyroETDScene([25], "T2CCC 1"),
     new SpyroETDScene([26], "T2CCC 2"),
+    "Transition 3 (Luau Island)",
+    new SpyroETDScene([38], "T3LI 1"),
+    new SpyroETDScene([39], "T3LI 2"),
+    "Demo Levels",
+    new SpyroETDScene([54], "Demo 1"),
+    new SpyroETDScene([55], "Demo 2"),
+    new SpyroETDScene([56], "Demo 3"),
+    new SpyroETDScene([57], "Demo 4"),
+    "Credits",
+    new SpyroETDScene([50], "Credits1 1"),
+    new SpyroETDScene([51], "Credits1 2"),
+    new SpyroETDScene([52], "Credits2 1"),
+    new SpyroETDScene([53], "Credits2 2"),
 ];
 
 export const sceneGroup: SceneGroup = { id, name, sceneDescs };

@@ -7,7 +7,7 @@ import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
-import { GeometryFile } from "./bin";
+import { GeomFile } from "./bin_geom";
 
 export class LevelProgram extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -58,7 +58,7 @@ export class LevelRenderer {
     private indexCount: number;
     private inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, geos: GeometryFile[]) {
+    constructor(cache: GfxRenderCache, geos: GeomFile[]) {
         const device = cache.device;
         const vertices: number[] = [];
         const colors: number[] = [];
