@@ -1,6 +1,6 @@
 import { BinaryReader } from "./bin";
 
-enum ChunkType {
+export enum ChunkType {
     Texture = 3671558448,
     Material = 3899959227,
     ObjectShape = 2724436415,
@@ -29,15 +29,16 @@ enum ChunkType {
 }
 
 abstract class Chunk {
+    public type: ChunkType;
     public instanceId: number;
     public name: string;
-    public common: number;
+    public groupId: number;
 
     constructor(reader: BinaryReader) {
         this.instanceId = reader.u32();
         this.name = reader.alignedString();
         reader.skip(4);
-        this.common = reader.u32();
+        this.groupId = reader.u32();
         this.parseData(reader);
     }
 
@@ -68,7 +69,7 @@ class Vertex {
     }
 }
 
-class TextureChunk extends Chunk {
+export class TextureChunk extends Chunk {
     data: Uint8Array;
     pxtName: string;
     data2: Uint8Array;
@@ -90,7 +91,7 @@ class MaterialChunk extends Chunk {
     }
 }
 
-class ObjectShapeChunk extends Chunk {
+export class ObjectShapeChunk extends Chunk {
     points: Vertex[];
     geomOffset: number;
     geomChunkCount: number;
@@ -206,7 +207,7 @@ class PropertyChunk extends Chunk {
     }
 }
 
-class TextureGroupChunk extends Chunk {
+export class TextureGroupChunk extends Chunk {
     count: number;
     textureIds: number[];
     baseTextureId: number;
@@ -295,7 +296,7 @@ class Property3Chunk extends Chunk {
     }
 }
 
-class ClusterShapeChunk extends Chunk {
+export class ClusterShapeChunk extends Chunk {
     points: Vertex[];
     geomOffset: number;
     geomChunkCount: number;
@@ -367,23 +368,33 @@ class MeshChunk extends Chunk {
     }
 }
 
+export class Shape2Chunk extends Chunk {
+    geomOffset: number;
+    geomChunkCount: number;
+    textureGroupId: number;
+
+    protected parseData(reader: BinaryReader) {
+        reader.skip(80);
+        this.geomOffset = reader.u32();
+        reader.skip(2);
+        this.geomChunkCount = reader.u16();
+        this.textureGroupId = reader.u32();
+    }
+}
+
 class Unknown1Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(44 + 68); } }
-class Shape2Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(92); } }
 class Shape3Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(88); } }
 class Shape4Chunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(44 + 126); } }
 class ParticleChunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(182); } }
 class FieldChunk extends Chunk { protected parseData(r: BinaryReader) { r.skip(44 + 134); } }
-
 class UnknownChunk extends Chunk {
-    constructor(reader: BinaryReader, public typeId: number) {
+    constructor(reader: BinaryReader) {
         super(reader);
     }
-    protected parseData(reader: BinaryReader): void {
-        console.warn(`Unknown Chunk Type: ${this.typeId} at ${reader.getOffset()}`);
-    }
+    protected parseData(reader: BinaryReader): void { }
 }
 
-export class MRBFile {
+class MRBFile {
     fileName: string = "";
     chunks: Chunk[] = [];
 
@@ -426,9 +437,10 @@ export class MRBFile {
                 case ChunkType.Mesh: chunk = new MeshChunk(reader); break;
                 // case ChunkType.BigShape: chunk = new BigShapeChunk(reader); break;
                 case ChunkType.Field: chunk = new FieldChunk(reader); break;
-                default: chunk = new UnknownChunk(reader, typeId); break;
+                default: chunk = new UnknownChunk(reader); break;
             }
             if (chunk) {
+                chunk.type = typeId as ChunkType;
                 this.chunks.push(chunk);
             }
         }
@@ -445,4 +457,28 @@ export class MRBBundle {
             this.files.push(new MRBFile(reader));
         }
     }
+}
+
+export function getChunksByType(bundle: MRBBundle, ...types: ChunkType[]): Chunk[] {
+    const chunks: Chunk[] = [];
+    for (const mrb of bundle.files) {
+        for (const chunk of mrb.chunks) {
+            if (types.includes(chunk.type)) {
+                chunks.push(chunk);
+            }
+        }
+    }
+    return chunks;
+}
+
+export function getChunksById(bundle: MRBBundle, ...ids: number[]): Chunk[] {
+    const chunks: Chunk[] = [];
+    for (const mrb of bundle.files) {
+        for (const chunk of mrb.chunks) {
+            if (ids.includes(chunk.instanceId)) {
+                chunks.push(chunk);
+            }
+        }
+    }
+    return chunks;
 }

@@ -1,3 +1,4 @@
+import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
 import { BinaryReader } from "./bin";
 
 class PXTHeader {
@@ -112,13 +113,13 @@ export class PXTFile {
     }
 }
 
-export function buildTextures(pxt: PXTFile): Texture[] {
+export function buildTextures(device: GfxDevice, pxt: PXTFile): Texture[] {
     const textures: Texture[] = [];
     for (const chunk of pxt.chunks) {
         const bitDepth = chunk.clut.bitDepth;
         if (bitDepth === 32) {
             const clut = chunk.clut;
-            textures.push(new Texture(new Uint8Array(clut.colors), clut.width, clut.height, bitDepth));
+            textures.push(new Texture(device, new Uint8Array(clut.colors), clut.width, clut.height, bitDepth));
         } else {
             for (const t of chunk.textures.slice(0, 1)) {
                 const rgba: Uint8Array = new Uint8Array(t.width * t.height * 4);
@@ -142,7 +143,7 @@ export function buildTextures(pxt: PXTFile): Texture[] {
                             rgba[index + 3] = 255; // clut[pointer + 3];
                         }
                     }
-                    textures.push(new Texture(rgba, t.width, t.height, bitDepth));
+                    textures.push(new Texture(device, rgba, t.width, t.height, bitDepth));
                 } else if (bitDepth === 4) {
                     // close but not exactly right
                     const clut = chunk.clut.colors;
@@ -157,7 +158,7 @@ export function buildTextures(pxt: PXTFile): Texture[] {
                             rgba[index + 3] = 255; // clut[pointer + 3];
                         }
                     }
-                    textures.push(new Texture(rgba, t.width, t.height, bitDepth));
+                    textures.push(new Texture(device, rgba, t.width, t.height, bitDepth));
                 }
             }
         }
@@ -166,5 +167,17 @@ export function buildTextures(pxt: PXTFile): Texture[] {
 }
 
 export class Texture {
-    constructor(public rgba: Uint8Array, public width: number, public height: number, public bitDepth: number) { }
+    public gfxTexture: GfxTexture;
+    constructor(device: GfxDevice, public rgba: Uint8Array, public width: number, public height: number, public bitDepth: number) {
+        const gfxTexture = device.createTexture({
+            width, height,
+            pixelFormat: GfxFormat.U8_RGBA_NORM,
+            usage: GfxTextureUsage.Sampled,
+            dimension: GfxTextureDimension.n2D,
+            depthOrArrayLayers: 1,
+            numLevels: 1
+        });
+        device.uploadTextureData(gfxTexture, 0, [rgba]);
+        this.gfxTexture = gfxTexture;
+    }
 }
