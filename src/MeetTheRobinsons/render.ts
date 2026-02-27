@@ -1,13 +1,10 @@
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxMipFilterMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxDevice, GfxBindingLayoutDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxBuffer, GfxInputLayout } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
-import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
-import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
 
 export class LevelProgram extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -86,7 +83,7 @@ export class LevelRenderer {
         // let offset = template.allocateUniformBuffer(LevelProgram.ub_SceneParams, 16);
         // const buffer = template.mapUniformBufferF32(LevelProgram.ub_SceneParams);
         // offset += fillMatrix4x4(buffer, offset, viewerInput.camera.clipFromWorldMatrix);
-        
+
         // this.submitBatches(this.batches, renderInstManager, renderHelper);
         // renderInstManager.popTemplate();
     }

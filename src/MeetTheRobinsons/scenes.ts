@@ -9,7 +9,8 @@ import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } fr
 import { Texture as ViewerTexture } from "../viewer.js";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
-import { buildTextures, DBLFile, Texture } from "./bin.js";
+import { DBLFile } from "./bin.js";
+import { buildTextures, Texture } from "./bin_texture.js";
 import ArrayBufferSlice from "../ArrayBufferSlice.js";
 
 export class WilburRenderer implements SceneGfx {
@@ -21,7 +22,7 @@ export class WilburRenderer implements SceneGfx {
     constructor(device: GfxDevice, textures: Texture[]) {
         const viewerTextures: ViewerTexture[] = [];
         for (let i = 0; i < textures.length; i++) {
-            viewerTextures.push(convertToViewerTexture(`texture_${i}`, textures[i]));
+            viewerTextures.push(convertToViewerTexture(textures[i].name, textures[i]));
         }
         this.textureHolder = new FakeTextureHolder(viewerTextures);
         this.renderHelper = new GfxRenderHelper(device);
