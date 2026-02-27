@@ -107,6 +107,7 @@ import * as Scenes_Descent2 from './Descent1_2/Scenes_Descent2.js';
 import * as Scenes_Descent2Vertigo from './Descent1_2/Scenes_Descent2Vertigo.js';
 import * as Scenes_Spyro1 from './Spyro1/scenes.js';
 import * as Scenes_CrazyTaxi from './CrazyTaxi/scenes.js';
+import * as Scenes_Wilbur from './MeetTheRobinsons/scenes.js';
 
 import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_FileDrops.js';
 
@@ -133,6 +134,8 @@ import { IS_DEVELOPMENT } from './BuildVersion.js';
 import { GfxPlatform } from './gfx/platform/GfxPlatform.js';
 
 const sceneGroups: (string | SceneGroup)[] = [
+    "Test",
+    Scenes_Wilbur.sceneGroup,
     "Wii",
     Scenes_MarioKartWii.sceneGroup,
     Scenes_KirbysReturnToDreamLand.sceneGroup,
