@@ -1,5 +1,5 @@
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
-import { BinaryReader, ChunkType, DBLChunk, DBLFile } from "./bin";
+import { BinaryReader, ChunkType, DBLFile, TextureChunk } from "./bin";
 
 export class Texture {
     public gfxTexture: GfxTexture;
@@ -28,29 +28,6 @@ export function buildTextures(device: GfxDevice, dblFile: DBLFile): Texture[] {
         }
     }
     return textures;
-}
-
-export class TextureChunk extends DBLChunk {
-    private count: number;
-    private start: number;
-    private name: string;
-    private headers: TextureHeader[];
-    public textures: TextureData[];
-
-    protected parseData(reader: BinaryReader): void {
-        this.start = reader.getPointer();
-        this.count = reader.u32();
-        reader.padding(20);
-        this.name = reader.string(32);
-        this.headers = [];
-        this.textures = [];
-        for (let i = 0; i < this.count; i++) {
-            this.headers.push(new TextureHeader(reader));
-        }
-        for (let i = 0; i < this.count; i++) {
-            this.textures.push(new TextureData(reader, this.headers[i], this.start));
-        }
-    }
 }
 
 export class TextureHeader {
@@ -87,7 +64,7 @@ export class TextureHeader {
     }
 }
 
-class TextureData {
+export class TextureData {
     public rgba: Uint8Array;
 
     constructor(reader: BinaryReader, public header: TextureHeader, start: number) {
@@ -120,7 +97,6 @@ class TextureData {
             }
             this.rgba = new Uint8Array(pixels);
         } else if (header.type === 8) {
-            // need to unswizzle clut/indices
             const clut = [];
             for (let i = 0; i < palette.length; i += header.paletteByte) {
                 clut.push({ r: palette[i], g: palette[i + 1], b: palette[i + 2] });
@@ -128,8 +104,8 @@ class TextureData {
             const pixels: number[] = [];
             for (let i = 0; i < indices.length; i++) {
                 const byte = indices[i];
-                const index = (byte >> 4) & 0x0F;
-                const index2 = byte & 0x0F;
+                const index = byte & 0x0F;
+                const index2 = (byte >> 4) & 0x0F;
                 pixels.push(clut[index].r, clut[index].g, clut[index].b, 255);
                 pixels.push(clut[index2].r, clut[index2].g, clut[index2].b, 255);
             }

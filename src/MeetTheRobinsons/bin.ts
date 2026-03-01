@@ -1,4 +1,5 @@
-import { TextureChunk } from "./bin_texture";
+import { GeometryBlock } from "./bin_geom";
+import { TextureData, TextureHeader } from "./bin_texture";
 
 export class BinaryReader {
     private pointer: number = 0;
@@ -25,7 +26,7 @@ export class BinaryReader {
     peek(n: number): number[] {
         const nums = [];
         for (let i = 0; i < n; i++) {
-            nums.push(this.data.getUint8(this.pointer + 1 + i));
+            nums.push(this.data.getUint8(this.pointer + i));
         }
         return nums;
     }
@@ -46,16 +47,57 @@ export enum ChunkType {
     Material = 917764
 }
 
-export abstract class DBLChunk {
+abstract class DBLChunk {
     constructor(reader: BinaryReader, public type: ChunkType) { this.parseData(reader); }
     protected abstract parseData(reader: BinaryReader): void;
 }
 
-class ObjectChunk extends DBLChunk {
-    protected parseData(reader: BinaryReader): void { }
+export class TextureChunk extends DBLChunk {
+    private count: number;
+    private start: number;
+    private name: string;
+    private headers: TextureHeader[];
+    public textures: TextureData[];
+
+    protected parseData(reader: BinaryReader): void {
+        this.start = reader.getPointer();
+        this.count = reader.u32();
+        reader.padding(20);
+        this.name = reader.string(32);
+        this.headers = [];
+        this.textures = [];
+        for (let i = 0; i < this.count; i++) {
+            this.headers.push(new TextureHeader(reader));
+        }
+        for (let i = 0; i < this.count; i++) {
+            this.textures.push(new TextureData(reader, this.headers[i], this.start));
+        }
+    }
 }
 
-class GeometryChunk extends DBLChunk {
+export class GeometryChunk extends DBLChunk {
+    private start: number;
+    private blockCount: number;
+    private offsets: number[];
+    public blocks: GeometryBlock[];
+
+    protected parseData(reader: BinaryReader): void {
+        this.start = reader.getPointer();
+        this.blockCount = reader.u16();
+        reader.padding(2);
+        this.offsets = [];
+        for (let i = 0; i < this.blockCount; i++) {
+            this.offsets.push(reader.u32());
+        }
+        this.blocks = [];
+        for (let i = 0; i < this.blockCount; i++) {
+            const offset = this.offsets[i];
+            this.blocks.push(new GeometryBlock(reader, this.start + offset));
+        }
+    }
+}
+
+class ObjectChunk extends DBLChunk {
     protected parseData(reader: BinaryReader): void { }
 }
 
@@ -93,4 +135,14 @@ export class DBLFile {
             reader.setPointer(chunkStart + size);
         }
     }
+}
+
+export function getChunksByType(dbl: DBLFile, ...types: ChunkType[]): DBLChunk[] {
+    const chunks: DBLChunk[] = [];
+    for (const chunk of dbl.chunks) {
+        if (types.includes(chunk.type)) {
+            chunks.push(chunk);
+        }
+    }
+    return chunks;
 }

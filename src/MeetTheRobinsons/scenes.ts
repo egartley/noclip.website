@@ -9,7 +9,7 @@ import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } fr
 import { Texture as ViewerTexture } from "../viewer.js";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
-import { DBLFile } from "./bin.js";
+import { ChunkType, DBLFile, GeometryChunk, getChunksByType } from "./bin.js";
 import { buildTextures, Texture } from "./bin_texture.js";
 import ArrayBufferSlice from "../ArrayBufferSlice.js";
 
@@ -19,14 +19,15 @@ export class WilburRenderer implements SceneGfx {
     private renderInstListMain = new GfxRenderInstList();
     private levelRenderer: LevelRenderer;
 
-    constructor(device: GfxDevice, textures: Texture[]) {
+    constructor(device: GfxDevice, dbl: DBLFile) {
         const viewerTextures: ViewerTexture[] = [];
+        const textures = buildTextures(device, dbl);
         for (let i = 0; i < textures.length; i++) {
             viewerTextures.push(convertToViewerTexture(textures[i].name, textures[i]));
         }
         this.textureHolder = new FakeTextureHolder(viewerTextures);
         this.renderHelper = new GfxRenderHelper(device);
-        this.levelRenderer = new LevelRenderer(this.renderHelper.renderCache);
+        this.levelRenderer = new LevelRenderer(this.renderHelper.renderCache, textures, getChunksByType(dbl, ChunkType.Geometry) as GeometryChunk[]);
     }
 
     protected prepareToRender(device: GfxDevice, viewerInput: ViewerRenderInput): void {
@@ -73,10 +74,9 @@ class WilburScene implements SceneDesc {
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
-        const file = await context.dataFetcher.fetchData(`${pathBase}/OBJECTS/ROCK_GENERIC.DBL`);
+        const file = await context.dataFetcher.fetchData(`${pathBase}/OBJECTS/PICKUP_MEAT.DBL`);
         const dblFile = new DBLFile(file.createDataView());
-        const textures = buildTextures(device, dblFile);
-        return new WilburRenderer(device, textures);
+        return new WilburRenderer(device, dblFile);
     }
 }
 

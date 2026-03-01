@@ -1,10 +1,14 @@
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxDevice, GfxBindingLayoutDescriptor } from "../gfx/platform/GfxPlatform";
+import { GfxDevice, GfxBindingLayoutDescriptor, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxBuffer, GfxInputLayout } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { GeometryChunk } from "./bin";
+import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
+import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
+import { Texture } from "./bin_texture";
 
 export class LevelProgram extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -43,56 +47,86 @@ void main() {
     }
 }
 
+const WORLD_SCALE = 300;
 const bindingLayouts: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 0 }];
 
 export class LevelRenderer {
+    private indexCount: number;
     private vertexBuffer: GfxBuffer;
     private indexBuffer: GfxBuffer;
     private inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache) {
-        // const device = cache.device;
-        // this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer);
-        // this.indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer);
+    constructor(cache: GfxRenderCache, private textures: Texture[], geometryChunks: GeometryChunk[]) {
+        const device = cache.device;
+        const vertices: number[] = [];
+        const indices: number[] = [];
+        for (const chunk of geometryChunks) {
+            for (const block of chunk.blocks) {
+                for (const strip of block.strips) {
+                    const indexStart = vertices.length / 3;
+                    const numVertices = strip.numbers[0];
+                    for (let i = 0; i < numVertices * 3; i++) {
+                        vertices.push(strip.vertices[i] * WORLD_SCALE);
+                    }
+                    let flip = false;
+                    for (let i = 0; i < numVertices - 2; i++) {
+                        const idx1 = indexStart + i;
+                        const idx2 = indexStart + i + 1;
+                        const idx3 = indexStart + i + 2;
+                        if (!flip) {
+                            indices.push(idx1, idx2, idx3);
+                        } else {
+                            indices.push(idx1, idx3, idx2);
+                        }
+                        flip = !flip;
+                    }
+                }
+            }
+        }
+        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer);
+        this.indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer);
+        this.indexCount = indices.length;
 
-        // this.inputLayout = cache.createInputLayout({
-        //     vertexAttributeDescriptors: [
-        //         { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 } // a_Position
-        //     ],
-        //     vertexBufferDescriptors: [
-        //         { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex } // pos
-        //     ],
-        //     indexBufferFormat: GfxFormat.U32_R,
-        // });
+        this.inputLayout = cache.createInputLayout({
+            vertexAttributeDescriptors: [
+                { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 } // a_Position
+            ],
+            vertexBufferDescriptors: [
+                { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex } // pos
+            ],
+            indexBufferFormat: GfxFormat.U32_R,
+        });
     }
 
     public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
-        // const renderInstManager = renderHelper.renderInstManager;
-        // const template = renderInstManager.pushTemplate();
-        // const program = renderHelper.renderCache.createProgram(new LevelProgram());
-        // template.setGfxProgram(program);
-        // template.setBindingLayouts(bindingLayouts);
-        // template.setUniformBuffer(renderHelper.uniformBuffer);
-        // template.setVertexInput(this.inputLayout,
-        //     [
-        //         { buffer: this.vertexBuffer, byteOffset: 0 }
-        //     ],
-        //     { buffer: this.indexBuffer, byteOffset: 0 },
-        // );
+        const renderInstManager = renderHelper.renderInstManager;
+        const template = renderInstManager.pushTemplate();
+        const program = renderHelper.renderCache.createProgram(new LevelProgram());
+        template.setGfxProgram(program);
+        template.setBindingLayouts(bindingLayouts);
+        template.setUniformBuffer(renderHelper.uniformBuffer);
+        template.setVertexInput(this.inputLayout,
+            [
+                { buffer: this.vertexBuffer, byteOffset: 0 }
+            ],
+            { buffer: this.indexBuffer, byteOffset: 0 },
+        );
 
-        // let offset = template.allocateUniformBuffer(LevelProgram.ub_SceneParams, 16);
-        // const buffer = template.mapUniformBufferF32(LevelProgram.ub_SceneParams);
-        // offset += fillMatrix4x4(buffer, offset, viewerInput.camera.clipFromWorldMatrix);
+        let offset = template.allocateUniformBuffer(LevelProgram.ub_SceneParams, 16);
+        const buffer = template.mapUniformBufferF32(LevelProgram.ub_SceneParams);
+        offset += fillMatrix4x4(buffer, offset, viewerInput.camera.clipFromWorldMatrix);
+        const renderInst = renderInstManager.newRenderInst();
+        renderInst.setDrawCount(this.indexCount);
+        renderInstManager.submitRenderInst(renderInst);
 
-        // this.submitBatches(this.batches, renderInstManager, renderHelper);
-        // renderInstManager.popTemplate();
+        renderInstManager.popTemplate();
     }
 
     public destroy(device: GfxDevice) {
         device.destroyBuffer(this.vertexBuffer);
         device.destroyBuffer(this.indexBuffer);
-        // for (const t of this.textures) {
-        //     device.destroyTexture(t.gfxTexture);
-        // }
+        for (const t of this.textures) {
+            device.destroyTexture(t.gfxTexture);
+        }
     }
 }
