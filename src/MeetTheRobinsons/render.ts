@@ -9,6 +9,7 @@ import { GeometryChunk } from "./bin";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 import { Texture } from "./bin_texture";
+import { Vertex } from "./bin_geom";
 
 export class LevelProgram extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -50,6 +51,11 @@ void main() {
 const WORLD_SCALE = 300;
 const bindingLayouts: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 0 }];
 
+function isDegenerate(v1: Vertex, v2: Vertex, v3: Vertex): boolean {
+    const isEqual = (a: Vertex, b: Vertex) => a.x === b.x && a.y === b.y && a.z === b.z;
+    return isEqual(v1, v2) || isEqual(v2, v3) || isEqual(v1, v3);
+}
+
 export class LevelRenderer {
     private indexCount: number;
     private vertexBuffer: GfxBuffer;
@@ -65,20 +71,25 @@ export class LevelRenderer {
                 for (const strip of block.strips) {
                     const indexStart = vertices.length / 3;
                     const numVertices = strip.numbers[0];
-                    for (let i = 0; i < numVertices * 3; i++) {
-                        vertices.push(strip.vertices[i] * WORLD_SCALE);
+                    for (let i = 0; i < numVertices; i++) {
+                        vertices.push(
+                            strip.vertices[i].x * WORLD_SCALE,
+                            strip.vertices[i].y * WORLD_SCALE,
+                            strip.vertices[i].z * WORLD_SCALE
+                        );
                     }
-                    let flip = false;
                     for (let i = 0; i < numVertices - 2; i++) {
+                        if (isDegenerate(strip.vertices[i], strip.vertices[i + 1], strip.vertices[i + 2])) {
+                            continue;
+                        }
                         const idx1 = indexStart + i;
                         const idx2 = indexStart + i + 1;
                         const idx3 = indexStart + i + 2;
-                        if (!flip) {
+                        if (i % 2 === 0) {
                             indices.push(idx1, idx2, idx3);
                         } else {
                             indices.push(idx1, idx3, idx2);
                         }
-                        flip = !flip;
                     }
                 }
             }

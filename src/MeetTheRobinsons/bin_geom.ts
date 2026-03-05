@@ -41,9 +41,15 @@ export class GeometryBlock {
     }
 }
 
+export interface Vertex {
+    x: number;
+    y: number;
+    z: number;
+}
+
 class GeometryStrip {
     public valid: boolean;
-    public vertices: number[];
+    public vertices: Vertex[];
     public numbers: number[];
 
     constructor(reader: BinaryReader) {
@@ -63,7 +69,7 @@ class GeometryStrip {
                 const y = reader.f32();
                 const z = reader.f32();
                 reader.padding(4);
-                this.vertices.push(x, y, z);
+                this.vertices.push({x, y, z});
             }
 
             reader.padding(4);

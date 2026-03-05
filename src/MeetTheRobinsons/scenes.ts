@@ -74,7 +74,7 @@ class WilburScene implements SceneDesc {
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
-        const file = await context.dataFetcher.fetchData(`${pathBase}/OBJECTS/PICKUP_MEAT.DBL`);
+        const file = await context.dataFetcher.fetchData(`${pathBase}/WEAPONS/MAGNETIZER.DBL`);
         const dblFile = new DBLFile(file.createDataView());
         return new WilburRenderer(device, dblFile);
     }
