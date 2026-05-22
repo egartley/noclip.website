@@ -11,6 +11,7 @@ import { Checkbox, COOL_BLUE_COLOR, LayerPanel, Panel, RENDER_HACKS_ICON } from 
 import { DataFetcher } from "../DataFetcher.js";
 import { Texture as ViewerTexture } from "../viewer.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
+import { CameraController } from "../Camera.js";
 
 /*
 Game uses the RenderWare engine. Some files have their extensions changed (such as .TXD to .DIC) and contain custom structs
@@ -19,7 +20,6 @@ TODO
 
 Add frustum culling for base level geometry by node bboxes (need to check if nodes actually have bboxes)
     This isn't really needed since performance is not a problem, but good to have nonetheless
-knight242 texture is parsed wrong?
 Figure out X and Z for rotations (inconsistent across different objects)
     Example the grate and gems in snowy town
 Figure out lava in dragon's cave
@@ -119,6 +119,10 @@ class CasperRenderer implements SceneGfx {
         optionsPanel.contents.appendChild(toggleObjects.elem);
 
         return [layersPanel, optionsPanel];
+    }
+
+    public adjustCameraController(c: CameraController) {
+        c.setSceneMoveSpeedMult(8 / 60);
     }
 
     public destroy(device: GfxDevice): void {

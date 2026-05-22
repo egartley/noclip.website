@@ -199,6 +199,7 @@ export class CasperRWParser {
             const width = this.data.getUint16(this.offset, true);
             const height = this.data.getUint16(this.offset + 4, true);
             const bitDepth = this.data.getUint8(this.offset + 8);
+            const unkFlagNum = this.data.getUint8(this.offset + 14);
 
             const pixelCount = width * height;
             const mips: Uint8Array[] = [];
@@ -237,9 +238,10 @@ export class CasperRWParser {
                 }
                 mips.push(rgba);
             } else if (bitDepth === 32) {
+                const skipAmount = unkFlagNum === 2 ? 80 : 0;
                 // mip 0
                 const rgba = new Uint8Array(pixelCount * 4);
-                let clut = new Uint8Array(this.data.buffer, this.offset + 80, rgba.length);
+                let clut = new Uint8Array(this.data.buffer, this.offset + skipAmount, rgba.length);
                 for (let i = 0; i < rgba.length; i += 4) {
                     rgba[i] = clut[i];
                     rgba[i + 1] = clut[i + 1];
@@ -249,7 +251,7 @@ export class CasperRWParser {
                 mips.push(rgba);
 
                 // mip 1
-                const mip1Offset = this.offset + 80 + (pixelCount * 4) + 80;
+                const mip1Offset = this.offset + skipAmount + (pixelCount * 4) + skipAmount;
                 const mip1Length = pixelCount * 2;
                 if (mip1Offset + mip1Length <= this.data.buffer.byteLength) {
                     clut = new Uint8Array(this.data.buffer, mip1Offset, mip1Length);
