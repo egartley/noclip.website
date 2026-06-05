@@ -1,4 +1,4 @@
-import { mat4 } from "gl-matrix";
+import { mat3, mat4, vec3 } from "gl-matrix";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
 import { AABB } from "../Geometry";
 import ArrayBufferSlice from "../ArrayBufferSlice";
@@ -50,6 +50,17 @@ interface GeometryData {
     boundingSphere: CasperBoundingSphere;
 }
 
+interface SkeletonData {
+    indices: number[][];
+    weights: number[][];
+}
+
+export interface CasperBone {
+    parentIndex: number;
+    rot: mat3;
+    pos: vec3;
+}
+
 export interface CasperBSPNode {
     type: "node" | "leaf";
     mesh?: CasperMesh;
@@ -77,8 +88,10 @@ export interface CasperMesh {
     uvs: number[];
     colors: number[];
     indexSplits: IndexSplit[];
+    bones: CasperBone[];
     materials?: string[];
     boundingSphere?: CasperBoundingSphere;
+    skeletonData?: SkeletonData;
 }
 
 export interface CasperBoundingSphere {
@@ -122,6 +135,23 @@ const IGNORED_OBJS: string[] = ["6wall01", "6wall02", "6wall03", "6wall04", "6wa
 export class CasperRWParser {
     private data: DataView;
     private offset: number = 0;
+
+    /*
+    Note on animations
+
+    These are the .ska files. They begin with a count of 36-byte structures starting at 0xC and continuing
+    until the end of the file. It's not very clear what these are exactly, but the first X amount of
+    them have the same last 4 bytes, and the number of these are equal to 1 less than the number of bones in the
+    corresponding model (59 for casper himself, for example). The amount of remaining structures doesn't divide
+    evenly by the bone count, so they're aren't a simple list of bone transformations per frame type of thing.
+    If that were the case, then, for example, an entire walk animation might only have 12 frames, which wouldn't be right.
+    These structures also end with 4 bytes of an increasing counter that goes up by 36 each time. This leaves 32 bytes for
+    transformation data, with the last 4 of these possibly being a frame delta or something like that. There also isn't
+    any obvious way to tie any particular structure to a bone by an ID or index, other than the aforementioned beginning
+    structures being equal in count to 1 less than the model's bone count (which assumedly is sequential, starting after the root bone).
+    There may be a bit-wise mask or some other annoying way to identify what data goes to what bone per frame, or even how many
+    frames there should be to begin with. RW Analyze does not recognize the files either, so they might be entirely custom from standard RenderWare.
+    */
 
     constructor(buffer: ArrayBufferSlice) {
         this.data = buffer.createDataView();
@@ -375,15 +405,22 @@ export class CasperRWParser {
     public parseDFF(): CasperMesh {
         this.offset = 0;
         const clumpHeader = this.parseHeader();
-        const clumpEnd = this.offset + clumpHeader.size;
         const clumpStructHeader = this.parseHeader(); // struct is just object count, ignore
         this.offset += clumpStructHeader.size;
-        const frameListHeader = this.parseHeader(); // skip for now
-        this.offset += frameListHeader.size;
-        const atomicHeader = this.parseHeader();
-        const atomicStructHeader = this.parseHeader(); // frame and geometry index numbers
-        this.offset += atomicStructHeader.size;
+        const skeletonHeader = this.parseHeader();
+        const skeletonEnd = this.offset + skeletonHeader.size;
+        let bones;
+        if (skeletonHeader.id === Chunk.FRAME_LIST) {
+            const skeletonStructHeader = this.parseHeader();
+            bones = this.parseSkeleton();
+        }
+        this.offset = skeletonEnd;
+        const geometryListHeader = this.parseHeader();
+        const geometryListEnd = this.offset + geometryListHeader.size;
+        const geometryListStructHeader = this.parseHeader();
+        this.offset += geometryListStructHeader.size;
         const geometryHeader = this.parseHeader();
+        let mesh: CasperMesh = { vertices: [], uvs: [], colors: [], indexSplits: [], materials: [], bones: [] };
         if (geometryHeader.id === Chunk.GEOMETRY) {
             const geometryStructHeader = this.parseHeader();
             const geometryStructEnd = this.offset + geometryStructHeader.size;
@@ -399,17 +436,32 @@ export class CasperRWParser {
                     const binMeshHeader = this.parseHeader();
                     if (binMeshHeader.id === Chunk.BIN_MESH_PLG) {
                         splits.push(...this.parseBinMesh());
-                        return {
+                        mesh = {
                             vertices: geometryData.vertices,
                             uvs: geometryData.uvs, colors: geometryData.colors,
                             indexSplits: splits, materials,
+                            bones: bones ? bones : [],
                             boundingSphere: geometryData.boundingSphere
                         };
                     }
                 }
             }
         }
-        return { vertices: [], uvs: [], colors: [], indexSplits: [], materials: [] };
+        this.offset = geometryListEnd;
+        const atomicHeader = this.parseHeader();
+        if (atomicHeader.id == Chunk.ATOMIC) {
+            const atomicStructHeader = this.parseHeader();
+            this.offset += atomicStructHeader.size;
+            const extensionHeader = this.parseHeader();
+            if (extensionHeader.id == Chunk.EXTENSION) {
+                const skinHeader = this.parseHeader();
+                if (skinHeader.id == Chunk.SKIN_PLG) {
+                    const skeletonData = this.parseSkeletonData();
+                    mesh.skeletonData = skeletonData;
+                }
+            }
+        }
+        return mesh;
     }
 
     private parsePlaneSection(header: NodeHeader): CasperBSPNode {
@@ -483,7 +535,7 @@ export class CasperRWParser {
         const vertexCount = this.data.getUint32(this.offset + 8, true);
         if (vertexCount === 0) {
             this.offset = structEnd;
-            return { vertices: [], uvs: [], colors: [], indexSplits: [] };
+            return { vertices: [], uvs: [], colors: [], indexSplits: [], bones: [] };
         }
 
         // vertices (12), unknown colors (4), vertex colors (4), uvs (8)
@@ -535,7 +587,7 @@ export class CasperRWParser {
 
         this.offset = extEnd;
 
-        return { vertices, uvs, colors, indexSplits };
+        return { vertices, uvs, colors, indexSplits, bones: [] };
     }
 
     private parseBinMesh(): IndexSplit[] {
@@ -654,6 +706,80 @@ export class CasperRWParser {
         }
 
         return { vertices, uvs, colors, boundingSphere };
+    }
+
+    private parseSkeleton(): CasperBone[] {
+        // RW Analzye calls this data "frames" but it's actually just the skeleton, confirmed with debug visualizing
+        let pointer = this.offset;
+        const boneCount = this.data.getUint32(pointer, true);
+        const bones: CasperBone[] = Array(boneCount);
+        pointer += 4;
+        for (let i = 0; i < boneCount; i++) {
+            bones[i] = {
+                rot: mat3.fromValues(
+                    this.data.getFloat32(pointer, true), this.data.getFloat32(pointer + 4, true), this.data.getFloat32(pointer + 8, true),
+                    this.data.getFloat32(pointer + 12, true), this.data.getFloat32(pointer + 16, true), this.data.getFloat32(pointer + 20, true),
+                    this.data.getFloat32(pointer + 24, true), this.data.getFloat32(pointer + 28, true), this.data.getFloat32(pointer + 32, true)
+                ),
+                pos: vec3.fromValues(
+                    this.data.getFloat32(pointer + 36, true), this.data.getFloat32(pointer + 40, true), this.data.getFloat32(pointer + 44, true)
+                ),
+                parentIndex: this.data.getUint32(pointer + 48, true)
+            };
+            pointer += 56;
+        }
+        return bones;
+    }
+
+    private parseSkeletonData(): SkeletonData {
+        let pointer = this.offset;
+        const boneCount = this.data.getUint32(pointer, true);
+        const vertexCount = this.data.getUint32(pointer + 4, true);
+        pointer += 8;
+
+        const indices: number[][] = Array(vertexCount);
+        for (let i = 0; i < vertexCount; i++) {
+            indices[i] = [
+                this.data.getUint8(pointer),
+                this.data.getUint8(pointer + 1),
+                this.data.getUint8(pointer + 2),
+                this.data.getUint8(pointer + 3)
+            ];
+            pointer += 4;
+        }
+
+        const weights: number[][] = Array(vertexCount);
+        for (let i = 0; i < vertexCount; i++) {
+            weights[i] = [
+                this.data.getFloat32(pointer, true),
+                this.data.getFloat32(pointer + 4, true),
+                this.data.getFloat32(pointer + 8, true),
+                this.data.getFloat32(pointer + 12, true)
+            ];
+            pointer += 16;
+        }
+
+        // these are not the bones, idk what they are but RW Analyze calls them bones even though they aren't
+        // could be absolute transform matrices for each bone? the matrices in the bones themselves are relative
+        // const bones: Bone[] = Array(boneCount);
+        // for (let i = 0; i < boneCount; i++) {
+        //     const num1 = this.data.getUint32(pointer, true);
+        //     const num2 = this.data.getUint32(pointer + 4, true);
+        //     const num3 = this.data.getUint32(pointer + 8, true);
+        //     pointer += 12;
+        //     bones[i] = {
+        //         num1, num2, num3,
+        //         matrix: mat4.fromValues(
+        //             this.data.getFloat32(pointer, true), this.data.getFloat32(pointer + 4, true), this.data.getFloat32(pointer + 8, true), this.data.getFloat32(pointer + 12, true),
+        //             this.data.getFloat32(pointer + 16, true), this.data.getFloat32(pointer + 20, true), this.data.getFloat32(pointer + 24, true), this.data.getFloat32(pointer + 28, true),
+        //             this.data.getFloat32(pointer + 32, true), this.data.getFloat32(pointer + 36, true), this.data.getFloat32(pointer + 40, true), this.data.getFloat32(pointer + 44, true),
+        //             this.data.getFloat32(pointer + 48, true), this.data.getFloat32(pointer + 52, true), this.data.getFloat32(pointer + 56, true), this.data.getFloat32(pointer + 60, true)
+        //         )
+        //     };
+        //     pointer += 64;
+        // }
+
+        return { indices, weights };
     }
 
     private readString(size: number): string {

@@ -14,10 +14,12 @@ import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { CameraController } from "../Camera.js";
 
 /*
-Game uses the RenderWare engine. Some files have their extensions changed (such as .TXD to .DIC) and contain custom structs
+Game uses the RenderWare engine. Some files have their extensions changed (such as .TXD to .DIC) and contain custom structs.
+The RW Analyze tool can be used to read most of the files if you remove the extension filter in the file picker
 
 TODO
 
+Figure out animation data format (partially done, see notes in bin.ts)
 Add frustum culling for base level geometry by node bboxes (need to check if nodes actually have bboxes)
     This isn't really needed since performance is not a problem, but good to have nonetheless
 Figure out X and Z for rotations (inconsistent across different objects)
@@ -31,7 +33,10 @@ Figure out how some objects/texture without alpha names are set to be transparen
 Level objects
     Add different kinds, fix the ones currently ignored
     Idle animations, mix of plaintext and .ska files
-    Pathing?
+
+Nice to have
+
+NPC/enemy pathing
 */
 
 const CLEAR_COLORS: number[][] = [
@@ -144,6 +149,7 @@ class CasperScene implements SceneDesc {
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
+        device.checkForLeaks();
         const bsp = await context.dataFetcher.fetchData(`${pathBase}/MODELS/${this.bspPath}`);
         const dic = await context.dataFetcher.fetchData(`${pathBase}/MODELS/LEVEL${this.levelNumber}.DIC`);
         const tom = await context.dataFetcher.fetchData(`${pathBase}/SCRIPTC/${this.id}/M${this.id}.TOM`);
