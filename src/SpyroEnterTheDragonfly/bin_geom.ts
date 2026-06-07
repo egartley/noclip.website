@@ -14,7 +14,7 @@ export class GeometryChunk {
     normals: number[];
     uvs: number[];
     colors: number[];
-    textureIndex: number;
+    textureIndex: number = -1;
 
     constructor(reader: BinaryReader) {
         this.offset = reader.getOffset();
@@ -83,8 +83,9 @@ export class GeometryChunk {
             const r = reader.u8();
             const g = reader.u8();
             const b = reader.u8();
-            const a = reader.u8();
-            this.colors.push(r, g, b, a);
+            reader.skip(1);
+            // const a = reader.u8();
+            this.colors.push(r, g, b);
         }
         if (normalCheck == 0x78) {
             // skip 3 extra sets of colors

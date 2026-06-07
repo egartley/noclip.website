@@ -29,7 +29,7 @@ export enum ChunkType {
 }
 
 abstract class Chunk {
-    public type: ChunkType;
+    public type: ChunkType | undefined;
     public instanceId: number;
     public name: string;
     public groupId: number;
@@ -70,9 +70,9 @@ class Vertex {
 }
 
 export class TextureChunk extends Chunk {
-    data: Uint8Array;
-    pxtName: string;
-    data2: Uint8Array;
+    data: Uint8Array = new Uint8Array();
+    pxtName: string = "";
+    data2: Uint8Array = new Uint8Array();
 
     protected parseData(reader: BinaryReader): void {
         this.data = reader.bytes(63);
@@ -82,8 +82,8 @@ export class TextureChunk extends Chunk {
 }
 
 class MaterialChunk extends Chunk {
-    flags: ChunkFlags;
-    data: Uint8Array;
+    flags: ChunkFlags | undefined;
+    data: Uint8Array = new Uint8Array();
 
     protected parseData(reader: BinaryReader): void {
         this.flags = new ChunkFlags(reader);
@@ -92,10 +92,10 @@ class MaterialChunk extends Chunk {
 }
 
 export class ObjectShapeChunk extends Chunk {
-    points: Vertex[];
-    geomOffset: number;
-    geomChunkCount: number;
-    textureGroupId: number;
+    points: Vertex[] = [];
+    geomOffset: number = -1;
+    geomChunkCount: number = -1;
+    textureGroupId: number = -1;
 
     protected parseData(reader: BinaryReader): void {
         this.points = [];
@@ -115,8 +115,8 @@ export class ObjectShapeChunk extends Chunk {
 }
 
 class ObjectChunk extends Chunk {
-    flags: ChunkFlags;
-    points: Vertex[];
+    flags: ChunkFlags | undefined;
+    points: Vertex[] = [];
 
     protected parseData(reader: BinaryReader): void {
         this.flags = new ChunkFlags(reader);
@@ -130,8 +130,8 @@ class ObjectChunk extends Chunk {
 }
 
 class AttributeChunk extends Chunk {
-    subData: number[][];
-    subData2: number[][];
+    subData: number[][] = [];
+    subData2: number[][] = [];
 
     protected parseData(reader: BinaryReader): void {
         reader.skip(9);
@@ -156,7 +156,7 @@ class AttributeChunk extends Chunk {
 }
 
 class AnimatedObjectChunk extends Chunk {
-    animationId: number;
+    animationId: number = -1;
 
     protected parseData(reader: BinaryReader): void {
         const count = reader.u32();
@@ -208,9 +208,9 @@ class PropertyChunk extends Chunk {
 }
 
 export class TextureGroupChunk extends Chunk {
-    count: number;
-    textureIds: number[];
-    baseTextureId: number;
+    count: number = -1;
+    textureIds: number[] = [];
+    baseTextureId: number = -1;
 
     protected parseData(reader: BinaryReader): void {
         reader.skip(88);
@@ -227,7 +227,7 @@ export class TextureGroupChunk extends Chunk {
 }
 
 class SpecularEnvChunk extends Chunk {
-    flags: ChunkFlags;
+    flags: ChunkFlags | undefined;
 
     protected parseData(reader: BinaryReader): void {
         this.flags = new ChunkFlags(reader);
@@ -241,7 +241,7 @@ class SpecularEnvChunk extends Chunk {
 }
 
 class AnimationChunk extends Chunk {
-    frameCount: number;
+    frameCount: number = -1;
 
     protected parseData(reader: BinaryReader): void {
         this.frameCount = reader.u8();
@@ -297,10 +297,10 @@ class Property3Chunk extends Chunk {
 }
 
 export class ClusterShapeChunk extends Chunk {
-    points: Vertex[];
-    geomOffset: number;
-    geomChunkCount: number;
-    textureGroupId: number;
+    points: Vertex[] = [];
+    geomOffset: number = -1;
+    geomChunkCount: number = -1;
+    textureGroupId: number = -1;
 
     protected parseData(reader: BinaryReader): void {
         this.points = [];
@@ -314,9 +314,9 @@ export class ClusterShapeChunk extends Chunk {
 }
 
 class ClusterChunk extends Chunk {
-    shapeId: number;
-    vertexCount: number;
-    vertices: Vertex[];
+    shapeId: number = -1;
+    vertexCount: number = -1;
+    vertices: Vertex[] = [];
 
     protected parseData(reader: BinaryReader): void {
         this.shapeId = reader.u32();
@@ -333,8 +333,8 @@ class ClusterChunk extends Chunk {
 }
 
 class Shape5Chunk extends Chunk {
-    flags: ChunkFlags;
-    point: Vertex;
+    flags: ChunkFlags | undefined;
+    point: Vertex | undefined;
 
     protected parseData(reader: BinaryReader): void {
         this.flags = new ChunkFlags(reader);
@@ -345,10 +345,10 @@ class Shape5Chunk extends Chunk {
 }
 
 class MeshChunk extends Chunk {
-    vertexCount: number;
-    faceCount: number;
-    vertices: Vertex[];
-    indices: number[];
+    vertexCount: number = -1;
+    faceCount: number = -1;
+    vertices: Vertex[] = [];
+    indices: number[] = [];
 
     protected parseData(reader: BinaryReader): void {
         this.vertices = [];
@@ -369,9 +369,9 @@ class MeshChunk extends Chunk {
 }
 
 export class Shape2Chunk extends Chunk {
-    geomOffset: number;
-    geomChunkCount: number;
-    textureGroupId: number;
+    geomOffset: number = -1;
+    geomChunkCount: number = -1;
+    textureGroupId: number = -1;
 
     protected parseData(reader: BinaryReader) {
         reader.skip(80);
@@ -463,7 +463,7 @@ export function getChunksByType(bundle: MRBBundle, ...types: ChunkType[]): Chunk
     const chunks: Chunk[] = [];
     for (const mrb of bundle.files) {
         for (const chunk of mrb.chunks) {
-            if (types.includes(chunk.type)) {
+            if (types.includes(chunk.type!)) {
                 chunks.push(chunk);
             }
         }
