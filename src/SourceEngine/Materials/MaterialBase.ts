@@ -510,7 +510,7 @@ export abstract class BaseMaterial {
         if (vtf === null)
             return false;
 
-        return vtf.lateBinding !== null;
+        return vtf.lateBinding !== undefined;
     }
 
     protected paramFillVector4(d: Float32Array, offs: number, name: string): number {
@@ -649,7 +649,7 @@ export abstract class BaseMaterial {
             megaStateFlags.depthWrite = true;
             this.isTranslucent = false;
         } else {
-            throw "whoops";
+            throw new Error("whoops");
         }
     }
 

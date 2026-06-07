@@ -54,6 +54,11 @@ rust/target/
 
 data/*
 !data/.gitkeep
+!data/Examples/
 dist/
 
 .wireit
+
+__pycache__/
+*.pyc
+.venv/

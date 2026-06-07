@@ -274,7 +274,7 @@ function findTimeInSchejule(schedule: dScnKy__Schedule, time: number): dScnKy__S
             return entry;
     }
 
-    throw "whoops";
+    throw new Error("whoops");
 }
 
 function dKy_light_influence_id(lights: LIGHT_INFLUENCE[], pos: vec3): number {
@@ -890,7 +890,7 @@ function dKy_event_proc(globals: dGlobals): void {
                         if (envLight.rainCount < 250)
                             dKyw_rain_set(envLight, envLight.rainCount + 1);
                     } else {
-                        throw "whoops";
+                        throw new Error("whoops");
                     }
 
                     if (envLight.colpatWeather !== colpat) {
@@ -911,11 +911,11 @@ function dKankyo_DayProc(globals: dGlobals): void {
     // Called once a day.
 }
 
-function dKy_getdaytime_hour(globals: dGlobals): number {
+export function dKy_getdaytime_hour(globals: dGlobals): number {
     return globals.g_env_light.curTime / 15.0;
 }
 
-function dKy_daynight_check(globals: dGlobals): boolean {
+export function dKy_daynight_check(globals: dGlobals): boolean {
     const hour = dKy_getdaytime_hour(globals);
     return hour < 5 || hour > 17;
 }

@@ -117,7 +117,7 @@ function translateQueryPoolType(type: GfxQueryPoolType): GLenum {
     case GfxQueryPoolType.OcclusionConservative:
         return WebGL2RenderingContext.ANY_SAMPLES_PASSED_CONSERVATIVE;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -141,7 +141,7 @@ function translateVertexFormat(fmt: GfxFormat): { size: number, type: GLenum, no
         case FormatTypeFlags.F32:
             return WebGL2RenderingContext.FLOAT;
         default:
-            throw "whoops";
+            throw new Error("whoops");
         }
     }
 
@@ -192,7 +192,7 @@ function translateIndexFormat(format: GfxFormat): GLenum {
     case GfxFormat.U32_R:
         return WebGL2RenderingContext.UNSIGNED_INT;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -215,7 +215,7 @@ function translateBufferUsageToTarget(usage: GfxBufferUsage): GLenum {
     else if (usage & (GfxBufferUsage.Storage | GfxBufferUsage.CopySrc))
         return WebGL2RenderingContext.COPY_WRITE_BUFFER;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateWrapMode(wrapMode: GfxWrapMode): GLenum {
@@ -227,7 +227,7 @@ function translateWrapMode(wrapMode: GfxWrapMode): GLenum {
     case GfxWrapMode.Mirror:
         return WebGL2RenderingContext.MIRRORED_REPEAT;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -272,7 +272,7 @@ function translateTextureDimension(dimension: GfxTextureDimension): GLenum {
     else if (dimension === GfxTextureDimension.n3D)
         return WebGL2RenderingContext.TEXTURE_3D;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateCompareMode(compareMode: GfxCompareMode): GLenum {
@@ -771,7 +771,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         case GfxFormat.D24:
             return WebGL2RenderingContext.DEPTH_COMPONENT24;
         default:
-            throw "whoops";
+            throw new Error("whoops");
         }
     }
 
@@ -832,7 +832,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         case FormatTypeFlags.D32FS8:
             return WebGL2RenderingContext.FLOAT_32_UNSIGNED_INT_24_8_REV;
         default:
-            throw "whoops";
+            throw new Error("whoops");
         }
     }
 
@@ -974,7 +974,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
             gl.texStorage2D(gl_target, numLevels, internalformat, descriptor.width, descriptor.height);
             assert(descriptor.depthOrArrayLayers === 6);
         } else {
-            throw "whoops";
+            throw new Error("whoops");
         }
         const texture: GfxTextureP_GL = { _T: _T.Texture, ResourceUniqueId: this.getNextUniqueId(),
             gl_texture, gl_target,
@@ -1071,7 +1071,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
     }
 
     public createComputeProgram(program: GfxComputeProgramDescriptor): GfxProgram {
-        throw "whoops";
+        throw new Error("whoops");
     }
 
     public createProgram(descriptor: GfxRenderProgramDescriptor): GfxProgramP_GL {
@@ -1172,7 +1172,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
     }
 
     public createComputePipeline(descriptor: GfxComputePipelineDescriptor): GfxComputePipeline {
-        throw "whoops";
+        throw new Error("whoops");
     }
 
     public createReadback(byteSize: number): GfxReadback {
@@ -1301,7 +1301,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         this._currentRenderPassDescriptor = descriptor;
 
         const { colorAttachments, depthStencilAttachment } = descriptor;
-        this._setRenderPassParametersBegin(colorAttachments.length);
+        this._setRenderPassParametersBegin(colorAttachments);
         for (let i = 0; i < colorAttachments.length; i++)
             this._setRenderPassParametersColor(i, colorAttachments[i]);
         this._setRenderPassParametersDepthStencil(depthStencilAttachment);
@@ -1324,7 +1324,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
     }
 
     public createComputePass(): GfxComputePass {
-        throw "whoops";
+        throw new Error("whoops");
     }
 
     public submitPass(o: GfxPass): void {
@@ -1385,7 +1385,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     }
 
-    public copyCanvasToTexture(dst_: GfxTexture, dstZ: number, src: HTMLCanvasElement): void {
+    public copyExternalImageToTexture(dst_: GfxTexture, dstZ: number, src: HTMLCanvasElement | ImageBitmap): void {
         const gl = this.gl;
 
         const dst = dst_ as GfxTextureP_GL;
@@ -1397,7 +1397,15 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         const gl_format = this.translateTextureFormat(dst.pixelFormat);
         const gl_type = this.translateTextureType(dst.pixelFormat);
 
-        gl.texSubImage3D(gl_target, 0, 0, 0, dstZ, dst.width, dst.height, 1, gl_format, gl_type, src);
+        if (dst.dimension === GfxTextureDimension.n2D) {
+            assert(dstZ === 0);
+            gl.texSubImage2D(gl_target, 0, 0, 0, dst.width, dst.height, gl_format, gl_type, src);
+        } else if (dst.dimension === GfxTextureDimension.Cube) {
+            const face_target = WebGL2RenderingContext.TEXTURE_CUBE_MAP_POSITIVE_X + (dstZ % 6);
+            gl.texSubImage2D(face_target, 0, 0, 0, dst.width, dst.height, gl_format, gl_type, src);
+        } else if (dst.dimension === GfxTextureDimension.n3D || dst.dimension === GfxTextureDimension.n2DArray) {
+            gl.texSubImage3D(gl_target, 0, 0, 0, dstZ, dst.width, dst.height, 1, gl_format, gl_type, src);
+        }
     }
 
     public uploadBufferData(buffer: GfxBuffer, dstByteOffset: number, data: Uint8Array, srcByteOffset: number = 0, byteSize: number = data.byteLength - srcByteOffset): void {
@@ -1613,7 +1621,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
 
         if (program.compileState === GfxProgramCompileStateP_GL.NeedsCompile) {
             // This should not happen.
-            throw "whoops";
+            throw new Error("whoops");
         } if (program.compileState === GfxProgramCompileStateP_GL.Compiling) {
             let complete: boolean;
 
@@ -1861,12 +1869,17 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         this._currentSampleCount = sampleCount;
     }
 
-    private _setRenderPassParametersBegin(numColorAttachments: number): void {
+    private _setRenderPassParametersBegin(colorAttachments: (GfxRenderPassAttachmentColor | null)[]): void {
         const gl = this.gl;
+
+        if (colorAttachments.length === 1 && (colorAttachments[0]?.renderTarget as GfxRenderTargetP_GL).gfxTexture  === this._scTexture) {
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this._scPlatformFramebuffer);
+            return;
+        }
 
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this._renderPassDrawFramebuffer);
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
-        for (let i = numColorAttachments; i < this._currentColorAttachment.length; i++) {
+        for (let i = colorAttachments.length; i < this._currentColorAttachment.length; i++) {
             const attachment = this._currentColorAttachment[i];
             if (!attachment)
                 continue;
@@ -1876,7 +1889,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
                 gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, null, 0);
             this._currentColorAttachment[i] = null;
         }
-        this._currentColorAttachment.length = numColorAttachments;
+        this._currentColorAttachment.length = colorAttachments.length;
     }
 
     private _setRenderPassParametersColor(i: number, passAttachment: GfxRenderPassAttachmentColor | null): void {
@@ -2000,7 +2013,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         else if (gl_target === gl.TEXTURE_CUBE_MAP)
             return this._fallbackTextureCube;
         else
-            throw "whoops";
+            throw new Error("whoops");
     }
 
     public setBindings(bindingLayoutIndex: number, bindings_: GfxBindings, dynamicByteOffsets: number[]): void {
@@ -2195,7 +2208,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
     private _applyStencil(): void {
         if (this._currentStencilRef === null)
             return;
-        this.gl.stencilFunc(this._currentMegaState.stencilCompare, this._currentStencilRef, 0xFF);
+        this.gl.stencilFunc(translateCompareMode(this._currentMegaState.stencilCompare), this._currentStencilRef, 0xFF);
     }
 
     private _setMegaState(newMegaState: GfxMegaStateDescriptor): void {
@@ -2392,6 +2405,14 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         gl.drawArrays(pipeline.drawMode, firstVertex, count);
         this._debugGroupStatisticsDrawCall();
         this._debugGroupStatisticsTriangles(count / 3);
+    }
+
+    public drawInstanced(count: number, firstVertex: number, instanceCount: number): void {
+        const gl = this.gl;
+        const pipeline = this._currentPipeline;
+        gl.drawArraysInstanced(pipeline.drawMode, firstVertex, count, instanceCount);
+        this._debugGroupStatisticsDrawCall();
+        this._debugGroupStatisticsTriangles((count / 3) * instanceCount);
     }
 
     public drawIndexed(count: number, firstIndex: number): void {

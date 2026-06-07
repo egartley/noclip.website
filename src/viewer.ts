@@ -20,8 +20,7 @@ export interface ViewerUpdateInfo {
 }
 
 export interface Texture {
-    name: string;
-    surfaces: HTMLCanvasElement[];
+    gfxTexture: GfxTexture;
     extraInfo?: Map<string, string> | null;
 }
 
@@ -415,5 +414,5 @@ export function makeErrorUI(errorCode: InitErrorCode): DocumentFragment {
 <p>Please try to update your browser to a more recent version.
 `);
     else
-        throw "whoops";
+        throw new Error("whoops");
 }

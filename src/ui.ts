@@ -1,23 +1,24 @@
 
 // New UI system
 
-import * as Viewer from './viewer.js';
-import { assertExists, assert } from './util.js';
-import { CameraControllerClass, OrbitCameraController, FPSCameraController, OrthoCameraController, CameraController, Camera } from './Camera.js';
+import { GIT_SHORT_REVISION, GITHUB_REVISION_URL, GITHUB_URL, IS_DEVELOPMENT } from './BuildVersion.js';
+import { Camera, CameraController, CameraControllerClass, FPSCameraController, OrbitCameraController, OrthoCameraController } from './Camera.js';
 import { Color, colorToCSS } from './Color.js';
-import { GITHUB_REVISION_URL, GITHUB_URL, GIT_SHORT_REVISION, IS_DEVELOPMENT } from './BuildVersion.js';
-import { SaveManager, GlobalSaveManager } from "./SaveManager.js";
-import { RenderStatistics } from './RenderStatistics.js';
-import { GlobalGrabManager } from './GrabManager.js';
-import { clamp, invlerp, lerp, MathConstants } from './MathHelpers.js';
 import { DebugFloaterHolder } from './DebugFloaters.js';
+import { GlobalGrabManager } from './GrabManager.js';
 import { DraggingMode } from './InputManager.js';
-import { CLAPBOARD_ICON, StudioPanel } from './Studio.js';
+import { clamp, invlerp, lerp, MathConstants } from './MathHelpers.js';
+import { RenderStatistics } from './RenderStatistics.js';
+import { GlobalSaveManager, SaveManager } from "./SaveManager.js";
 import { SceneDesc, SceneGroup } from './SceneBase.js';
+import { CLAPBOARD_ICON, StudioPanel } from './Studio.js';
+import { assert, assertExists } from './util.js';
+import * as Viewer from './viewer.js';
 
 // @ts-ignore
 import logoURL from './assets/logo.png';
 import { AntialiasingMode } from './gfx/helpers/RenderGraphHelpers.js';
+import { TextureCanvas } from './TextureViewer.js';
 
 export const HIGHLIGHT_COLOR = 'rgb(210, 30, 30)';
 export const COOL_BLUE_COLOR = 'rgb(20, 105, 215)';
@@ -343,7 +344,7 @@ export abstract class ScrollSelect implements Widget {
                 else if (item.name !== undefined)
                     textSpan.textContent = item.name;
                 else
-                    throw "whoops";
+                    throw new Error("whoops");
                 selector.appendChild(textSpan);
 
                 const index = i;
@@ -360,26 +361,50 @@ export abstract class ScrollSelect implements Widget {
                 outer.onmouseup = () => {
                     this.isDragging = false;
                 };
-                outer.onmouseover = (e) => {
+                outer.onmouseenter = (e) => {
                     if (e.buttons === 0)
                         this.isDragging = false;
                     if (this.isDragging)
                         outer.focus();
                 };
             } else if (item.type === ScrollSelectItemType.Header) {
+                outer.dataset.header = '1';
                 const textSpan = document.createElement('span');
                 textSpan.classList.add('header');
                 textSpan.style.fontWeight = 'bold';
                 textSpan.style.lineHeight = `36px`;
                 textSpan.style.textShadow = `0 0 8px black`;
-                textSpan.style.paddingLeft = `8px`;
                 textSpan.style.verticalAlign = `baseline`;
+                const expandButton = document.createElement('span');
+                expandButton.textContent = `-`;
+                expandButton.style.display = `inline-block`;
+                expandButton.style.paddingRight = `8px`;
+                expandButton.style.width = `8px`;
+                expandButton.style.cursor = `pointer`;
+                let expanded = true;
+                const setExpanded = (v: boolean) => {
+                    expanded = v;
+                    expandButton.textContent = expanded ? `-` : `+`;
+                    for (let sib = outer.nextElementSibling; ; sib = sib?.nextElementSibling ?? null) {
+                        if (sib === null)
+                            break;
+                        const sibH = sib as HTMLElement;
+                        if (sibH.dataset.header)
+                            break;
+                        sibH.style.display = expanded ? `block` : `none`;
+                    }
+                };
+                expandButton.onclick = () => {
+                    setExpanded(!expanded);
+                };
+                textSpan.appendChild(expandButton);
+
                 if (item.html !== undefined)
                     textSpan.appendChild(item.html);
                 else if (item.name !== undefined)
-                    textSpan.textContent = item.name;
+                    textSpan.appendChild(document.createTextNode(item.name));
                 else
-                    throw "whoops";
+                    throw new Error("whoops");
                 outer.appendChild(textSpan);
                 hasHeader = true;
             }
@@ -757,8 +782,8 @@ export class Panel implements Widget {
         this.toplevel.style.alignItems = 'start';
         this.toplevel.style.outline = 'none';
         this.toplevel.onkeydown = this.onKeyDown.bind(this);
-        this.toplevel.onmouseover = this.syncSize.bind(this);
-        this.toplevel.onmouseout = this.syncSize.bind(this);
+        this.toplevel.onmouseenter = this.syncSize.bind(this);
+        this.toplevel.onmouseleave = this.syncSize.bind(this);
         this.toplevel.tabIndex = -1;
 
         this.mainPanel = document.createElement('div');
@@ -1288,15 +1313,15 @@ export class TextureViewer extends Panel {
     private newTexturesDebouncer = new FrameDebouncer();
     private textureList: TextureListHolder | null = null;
 
-    constructor() {
+    constructor(private viewer: Viewer.Viewer) {
         super();
 
         this.setTitle(TEXTURES_ICON, 'Textures');
         this.setVisible(false);
 
         this.searchBar = new TextEntry();
-        this.searchBar.ontext = (text) => {
-            this.filterTextures(text);
+        this.searchBar.ontext = () => {
+            this.newTexturesDebouncer.trigger();
         };
         this.searchBar.setIcon(SEARCH_ICON);
         this.searchBar.setPlaceholder('Search...');
@@ -1315,16 +1340,16 @@ export class TextureViewer extends Panel {
         this.surfaceView.style.height = '200px';
 
         // TODO(jstpierre): Make a less-sucky UI for the texture view.
-        this.surfaceView.onmouseover = () => {
+        this.surfaceView.onmouseenter = () => {
             // Checkerboard
             this.surfaceView.style.backgroundColor = 'white';
             this.surfaceView.style.backgroundImage = CHECKERBOARD_IMAGE;
         };
-        this.surfaceView.onmouseout = () => {
+        this.surfaceView.onmouseleave = () => {
             this.surfaceView.style.backgroundColor = 'black';
             this.surfaceView.style.backgroundImage = '';
         };
-        this.surfaceView.onmouseout(null as unknown as MouseEvent);
+        this.surfaceView.onmouseleave(null as unknown as MouseEvent);
 
         this.contents.appendChild(this.surfaceView);
 
@@ -1337,6 +1362,7 @@ export class TextureViewer extends Panel {
         this.extraRack.appendChild(this.fullSurfaceView);
 
         this.newTexturesDebouncer.callback = () => {
+            this.filterTextures();
             if (this.textureList !== null)
                 this.scrollList.setStrings(this.filteredTextureNames);
             else
@@ -1345,11 +1371,11 @@ export class TextureViewer extends Panel {
         this.setTextureList(null);
     }
 
-    private filterTextures(search: string) {
+    private filterTextures() {
+        const search = this.searchBar.textfield.getValue();
         this.filteredTextureNames = this.textureList!.textureNames.filter(name => {
             return name.toLowerCase().includes(search.toLowerCase());
         });
-        this.newTexturesDebouncer.trigger();
     }
 
     private showInSurfaceView(surface: HTMLCanvasElement) {
@@ -1379,19 +1405,17 @@ export class TextureViewer extends Panel {
         const textureIdx = this.textureList!.textureNames.findIndex(haystack => haystack === name);
         assert(textureIdx !== undefined);
         const texture = await this.textureList!.getViewerTexture(textureIdx);
-        assert(texture.surfaces.length > 0);
 
         this.scrollList.setHighlighted(filteredNameIdx);
 
         const properties = new Map<string, string>();
-        properties.set('Name', texture.name);
-        properties.set('Mipmaps', '' + texture.surfaces.length);
-        properties.set('Width', '' + texture.surfaces[0].width);
-        properties.set('Height', '' + texture.surfaces[0].height);
+        properties.set('Name', texture.gfxTexture.ResourceName!);
+        properties.set('Mipmaps', '' + texture.gfxTexture.numLevels);
+        properties.set('Width', '' + texture.gfxTexture.width);
+        properties.set('Height', '' + texture.gfxTexture.height);
 
-        if (texture.extraInfo) {
+        if (texture.extraInfo)
             texture.extraInfo.forEach((value, key) => properties.set(key, value));
-        }
 
         this.properties.innerHTML = `<div style="display: grid; grid-template-columns: 1fr 1fr"></div>`;
 
@@ -1406,10 +1430,15 @@ export class TextureViewer extends Panel {
             div.appendChild(valueSpan);
         });
 
-        if (texture.surfaces.length > 0)
-            this.showInSurfaceView(texture.surfaces[0]);
+        const textureCanvas = new TextureCanvas(this.viewer.gfxSwapChain, texture.gfxTexture, 0, 0);
+        this.showInSurfaceView(textureCanvas.canvas);
 
-        this.showInFullSurfaceView(texture.surfaces);
+        const mipSurfaces: HTMLCanvasElement[] = [];
+        for (let i = 0; i < texture.gfxTexture.numLevels; i++) {
+            const textureCanvas = new TextureCanvas(this.viewer.gfxSwapChain, texture.gfxTexture, i, 0);
+            mipSurfaces.push(textureCanvas.canvas);
+        }
+        this.showInFullSurfaceView(mipSurfaces);
     }
 
     public setTextureList(textureList: TextureListHolder | null = null): void {
@@ -1437,7 +1466,7 @@ export class Slider implements Widget {
     public elem: HTMLElement;
     public onvalue: ((value: number) => void) | null = null;
 
-    constructor() {
+    constructor(label?: string, value?: number, min?: number, max?: number) {
         this.toplevel = document.createElement('div');
 
         // DOM lacks a coherent way of adjusting pseudostyles, so this is what we end up with...
@@ -1486,6 +1515,13 @@ export class Slider implements Widget {
         this.sliderInput.oninput = this.onInput.bind(this);
 
         this.elem = this.toplevel;
+
+        if (label !== undefined)
+            this.setLabel(label);
+        if (min !== undefined && max !== undefined)
+            this.setRange(min, max);
+        if (value !== undefined)
+            this.setValue(value, false);
     }
 
     private onInput(): void {
@@ -2456,11 +2492,11 @@ abstract class SingleIconButton implements BottomBarWidget {
         this.elem.style.height = '32px';
         this.elem.style.pointerEvents = 'auto';
         this.elem.onclick = this.onClick.bind(this);
-        this.elem.onmouseover = () => {
+        this.elem.onmouseenter = () => {
             this.isHover = true;
             this.syncStyle();
         };
-        this.elem.onmouseout = () => {
+        this.elem.onmouseleave = () => {
             this.isHover = false;
             this.syncStyle();
         };
@@ -2768,12 +2804,12 @@ export class UI {
         this.panelToplevel.style.bottom = '0';
         this.panelToplevel.style.padding = '2em';
         this.panelToplevel.style.transition = '.2s background-color';
-        this.panelToplevel.onmouseover = () => {
+        this.panelToplevel.onmouseenter = () => {
             this.panelToplevel.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
             this.panelToplevel.style.overflow = 'auto';
             this.setPanelsAutoClosed(false);
         };
-        this.panelToplevel.onmouseout = () => {
+        this.panelToplevel.onmouseleave = () => {
             this.panelToplevel.style.backgroundColor = 'rgba(0, 0, 0, 0)';
             this.panelToplevel.style.overflow = 'hidden';
         };
@@ -2807,7 +2843,7 @@ export class UI {
         this.bottomBar.addWidgets(BottomBarArea.Right, this.fullscreenButton);
 
         this.sceneSelect = new SceneSelect();
-        this.textureViewer = new TextureViewer();
+        this.textureViewer = new TextureViewer(viewer);
         this.viewerSettings = new ViewerSettings(this);
         this.xrSettings = new XRSettings(this, viewer);
         this.statisticsPanel = new StatisticsPanel();

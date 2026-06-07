@@ -73,7 +73,7 @@ function translateLocation(attr: VertexAttribute): number {
         else if (attr.index === 1)
             return MaterialProgram_Base.a_TexCoord1;
         else
-            throw "whoops";
+            throw new Error("whoops");
     }
     case VertexInputSemantic.Normal:   return MaterialProgram_Base.a_Normal;
     case VertexInputSemantic.Tangent0: return MaterialProgram_Base.a_Tangent0;
@@ -108,7 +108,7 @@ function translateDataType(dataType: number): GfxFormat {
         // Everything else -- three floats.
         return GfxFormat.F32_RGBA;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -2982,7 +2982,7 @@ export class DarkSoulsRenderer implements Viewer.SceneGfx {
         this.renderHelper.renderInstManager.popTemplate();
 
         this.prepareToRender(viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
 
         this.renderContext.reset();
     }

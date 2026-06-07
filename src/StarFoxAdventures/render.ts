@@ -9,7 +9,7 @@ import { GfxRenderInst, GfxRenderInstList, GfxRenderInstManager } from "../gfx/r
 import * as GX from '../gx/gx_enum.js';
 import * as GX_Material from '../gx/gx_material.js';
 import { DrawParams, fillSceneParamsData, GXMaterialHelperGfx, GXRenderHelperGfx, GXTextureMapping, MaterialParams, SceneParams, ub_SceneParamsBufferSize } from '../gx/gx_render.js';
-import { TDDraw } from '../SuperMarioGalaxy/DDraw.js';
+import { TDDraw } from '../gx/DDraw.js';
 import { nArray } from '../util.js';
 import * as Viewer from '../viewer.js';
 
@@ -343,7 +343,7 @@ export class SFARenderer implements Viewer.SceneGfx {
         renderInstManager.popTemplate();
 
         this.renderHelper.prepareToRender();
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
     }
 
     public destroy(device: GfxDevice): void {
