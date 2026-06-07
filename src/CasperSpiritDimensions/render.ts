@@ -3,13 +3,12 @@ import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxBindingLayoutDescriptor, GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxBindingLayoutDescriptor, GfxBlendFactor, GfxBlendMode, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { CasperMesh, CasperTexture, CasperObjectInstance, CapserLevel, CasperBSPNode, CasperBone } from "./bin";
-import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
 import { computeModelMatrixSRT, MathConstants } from "../MathHelpers";
 import { AABB } from "../Geometry";
 import { Layer } from "../ui";
@@ -179,7 +178,7 @@ export class CasperLevelRenderer {
         uniformBuffer[offset++] = this.showTextures ? 1.0 : 0.0;
 
         computeViewMatrix(SCRATCH_VIEW, viewerInput.camera);
-        if (this.meshLayers.find(m => m.name === this.level.name)!.visible) {
+        if (this.meshLayers[0].visible) {
             const renderInst = renderHelper.renderInstManager.pushTemplate();
 
             let offset2 = template.allocateUniformBuffer(Shader.ub_InstanceParams, 16);
@@ -319,10 +318,20 @@ class MeshRenderer {
             inVertexBufferDescriptors.push({ byteStride: 16, frequency: GfxVertexBufferFrequency.PerVertex });
             this.boneMatrices = Array(mesh.bones.length);
             for (let i = 0; i < mesh.bones.length; i++) {
-                const bone = mesh.bones[i];
                 this.boneMatrices[i] = mat4.create();
-                const pbm = bone.parentIndex < 0xFFFFFFFF ? this.boneMatrices[bone.parentIndex] : this.computeShiftMatrix(instances[0]);
-                mat4.mul(this.boneMatrices[i], pbm, this.boneMatrices[i]);
+                computeModelMatrixSRT(this.boneMatrices[i], 1, 1, 1, 0, 0, 0,
+                    mesh.bones[i].pos[0] * WORLD_SCALE, mesh.bones[i].pos[1] * WORLD_SCALE, mesh.bones[i].pos[2] * WORLD_SCALE
+                );
+                // expand rotation 3x3 into 4x4, then apply to srt (rather than decomposing into srt)
+                const rot = mat4.fromValues(
+                    mesh.bones[i].rot[0], mesh.bones[i].rot[1], mesh.bones[i].rot[2], 0,
+                    mesh.bones[i].rot[3], mesh.bones[i].rot[4], mesh.bones[i].rot[5], 0,
+                    mesh.bones[i].rot[6], mesh.bones[i].rot[7], mesh.bones[i].rot[8], 0,
+                    0, 0, 0, 1
+                );
+                mat4.mul(this.boneMatrices[i], this.boneMatrices[i], rot);
+                const parentShiftMatrix = mesh.bones[i].parentIndex < mesh.bones.length ? this.boneMatrices[mesh.bones[i].parentIndex] : this.computeShiftMatrix(instances[0]);
+                mat4.mul(this.boneMatrices[i], parentShiftMatrix, this.boneMatrices[i]);
             }
             this.bones = mesh.bones;
         }

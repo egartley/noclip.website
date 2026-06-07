@@ -13,32 +13,6 @@ import { Texture as ViewerTexture } from "../viewer.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { CameraController } from "../Camera.js";
 
-/*
-Game uses the RenderWare engine. Some files have their extensions changed (such as .TXD to .DIC) and contain custom structs.
-The RW Analyze tool can be used to read most of the files if you remove the extension filter in the file picker
-
-TODO
-
-Figure out animation data format (partially done, see notes in bin.ts)
-Add frustum culling for base level geometry by node bboxes (need to check if nodes actually have bboxes)
-    This isn't really needed since performance is not a problem, but good to have nonetheless
-Figure out X and Z for rotations (inconsistent across different objects)
-    Example the grate and gems in snowy town
-Figure out lava in dragon's cave
-Figure out why some objects with meshes in TOM don't render
-    Example the cannon in the amusement park
-Figure out normals/lighting
-Figure out how some objects/texture without alpha names are set to be transparent
-    Example casper himself or kibosh
-Level objects
-    Add different kinds, fix the ones currently ignored
-    Idle animations, mix of plaintext and .ska files
-
-Nice to have
-
-NPC/enemy pathing
-*/
-
 const CLEAR_COLORS: number[][] = [
     [34, 35, 45], [91, 123, 68], [34, 35, 45], [11, 16, 29],
     [90, 79, 54], [5, 5, 5],     [5, 5, 5],    [5, 5, 5],
@@ -46,7 +20,7 @@ const CLEAR_COLORS: number[][] = [
     [12, 12, 39], [5, 5, 5],     [7, 10, 21],  [7, 19, 34]
 ];
 
-class CasperRenderer implements SceneGfx {
+class Renderer implements SceneGfx {
     public textureHolder: TextureHolder;
     private renderHelper: GfxRenderHelper;
     private renderInstListMain = new GfxRenderInstList();
@@ -137,13 +111,40 @@ class CasperRenderer implements SceneGfx {
     }
 }
 
+/*
+Game uses the RenderWare engine. Some files have their extensions changed (such as .TXD to .DIC) and contain custom structs.
+The RW Analyze tool can be used to read most of the files if you remove the extension filter in the file picker
+
+TODO
+
+Figure out animation data format (partially done, see notes in bin.ts)
+Add frustum culling for base level geometry by node bboxes (need to check if nodes actually have bboxes)
+    This isn't really needed since performance is not a problem, but good to have nonetheless
+Figure out X and Z for rotations (inconsistent across different objects)
+    Example the grate and gems in snowy town
+Figure out lava in dragon's cave
+Figure out why some objects with meshes in TOM don't render
+    Example the cannon in the amusement park
+Figure out normals/lighting
+Figure out how some objects/texture without alpha names are set to be transparent
+    Example casper himself or kibosh
+Level objects
+    Add different kinds, fix the ones currently ignored
+    Idle animations, mix of plaintext and .ska files
+Remove hardcoded clear colors and read from actual data (might be from fog color)
+
+Nice to have
+
+NPC/enemy pathing
+*/
+
 const pathBase = "CasperSD";
-class CasperScene implements SceneDesc {
+class Level implements SceneDesc {
     public id: string;
     private levelNumber: number;
 
     constructor(private bspPath: string, public name: string) {
-        // game is inconsistent with level numbers like "02" vs "2"
+        // game is annoyingly inconsistent with level numbers like "02" vs "2"
         this.id = bspPath.split("/")[1].split(".")[0];
         this.levelNumber = Number(this.id.split("LEVEL")[1]);
     }
@@ -163,7 +164,7 @@ class CasperScene implements SceneDesc {
 
         const textures = new CasperRWParser(dic).parseDIC(device, level.materials);
 
-        return new CasperRenderer(device, level, textures, objMeshes, instances);
+        return new Renderer(device, level, textures, objMeshes, instances);
     }
 }
 
@@ -201,30 +202,31 @@ async function buildDFFMeshes(dataFetcher: DataFetcher, level: CapserLevel, objD
     return meshes;
 }
 
+// level names are from the game's manual (other than "Hub", the dimension with just the house doesn't have an official name)
 const id = "CasperSD";
 const name = "Casper: Spirit Dimensions";
 const sceneDescs = [
     "Hub",
-    new CasperScene("HOUSE/LEVEL16.BSP", "Casper's House"),
-    "Medieval World",
-    new CasperScene("MEDIEVAL/LEVEL01.BSP", "Knight's Home"),
-    new CasperScene("MEDIEVAL/LEVEL02.BSP", "Thieves' Woods"),
-    new CasperScene("MEDIEVAL/LEVEL03.BSP", "Wizard's Tower"),
-    new CasperScene("MEDIEVAL/LEVEL04.BSP", "Snowy Town"),
-    new CasperScene("MEDIEVAL/LEVEL05.BSP", "Dragon's Cave"),
+    new Level("HOUSE/LEVEL16.BSP", "Casper's House"),
+    "The Medieval World",
+    new Level("MEDIEVAL/LEVEL01.BSP", "Knight's Home"),
+    new Level("MEDIEVAL/LEVEL02.BSP", "Thieves' Woods"),
+    new Level("MEDIEVAL/LEVEL03.BSP", "Wizard's Tower"),
+    new Level("MEDIEVAL/LEVEL04.BSP", "Snowy Town"),
+    new Level("MEDIEVAL/LEVEL05.BSP", "Dragon's Cave"),
     "Spirit Amusement Park",
-    new CasperScene("CARNIVAL/LEVEL06.BSP", "Vlad's Amusement Park"),
-    new CasperScene("CARNIVAL/LEVEL08.BSP", "Fun House"),
-    new CasperScene("CARNIVAL/LEVEL11.BSP", "Big Top"),
+    new Level("CARNIVAL/LEVEL06.BSP", "Vlad's Amusement Park"),
+    new Level("CARNIVAL/LEVEL08.BSP", "Fun House"),
+    new Level("CARNIVAL/LEVEL11.BSP", "Big Top"),
     "Kibosh's Factory",
-    new CasperScene("FACTORY/LEVEL12.BSP", "Monster Maker"),
-    new CasperScene("FACTORY/LEVEL13.BSP", "Refinery"),
-    new CasperScene("FACTORY/LEVEL14.BSP", "Doctor Deranged"),
+    new Level("FACTORY/LEVEL12.BSP", "Monster Maker"),
+    new Level("FACTORY/LEVEL13.BSP", "Refinery"),
+    new Level("FACTORY/LEVEL14.BSP", "Doctor Deranged"),
     "The Spirit World",
-    new CasperScene("SPIRIT/LEVEL07.BSP", "Ghost Ship"),
-    new CasperScene("SPIRIT/LEVEL10.BSP", "Kibosh's Castle"),
-    new CasperScene("SPIRIT/LEVEL09.BSP", "Kibosh's Castle Interior"),
-    new CasperScene("SPIRIT/LEVEL15.BSP", "Kibosh's Lair")
+    new Level("SPIRIT/LEVEL07.BSP", "Ghost Ship"),
+    new Level("SPIRIT/LEVEL10.BSP", "Kibosh's Castle"),
+    new Level("SPIRIT/LEVEL09.BSP", "Kibosh's Castle Interior"),
+    new Level("SPIRIT/LEVEL15.BSP", "Kibosh's Lair")
 ];
 
 export const sceneGroup: SceneGroup = { id, name, sceneDescs };
