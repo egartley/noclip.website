@@ -91,7 +91,8 @@ export interface CasperMaterial {
 export interface CasperObjectDefinition {
     names: string[];
     dffPath: string;
-    thirdValue: string;
+    setupAs: string;
+    indPath: string;
 }
 
 export interface CasperMesh {
@@ -371,16 +372,13 @@ export class CasperRWParser {
     }
 
     public parseOBD(): CasperObjectDefinition[] {
-        const rawText = new TextDecoder("utf-8").decode(new Uint8Array(this.data.buffer, this.data.byteOffset, this.data.byteLength));
+        const rawText = new TextDecoder("utf-8").decode(new Uint8Array(this.data.buffer));
         const lines = rawText.split("\n");
-        const objDefs: CasperObjectDefinition[] = [];
+        const defs: CasperObjectDefinition[] = [];
 
         function extractQuotedStrings(line: string): string[] {
             const matches = line.match(/"([^"]*)"/g);
-            if (!matches) {
-                return [];
-            }
-            return matches.map(s => s.slice(1, -1));
+            return matches!.map(s => s.slice(1, -1));
         }
 
         for (let line of lines) {
@@ -395,19 +393,21 @@ export class CasperRWParser {
                 const val1 = elems[2];
                 const val2 = elems.length > 3 ? elems[3] : "";
                 if (type === "alias") {
-                    for (const o of objDefs) {
-                        if (o.names.includes(val1)) {
-                            o.names.push(name);
+                    for (const def of defs) {
+                        if (def.names.includes(val1)) {
+                            def.names.push(name);
                             break;
                         }
                     }
                 } else if (type === "anim" || type === "basic") {
-                    objDefs.push({ names: [name], dffPath: val1.toUpperCase(), thirdValue: val2 });
+                    const setupAs = val2.startsWith("setupAs") ? val2.substring(9).toLowerCase() : "";
+                    const indPath = val2.startsWith("scriptC") ? val2.toUpperCase() : "";
+                    defs.push({ names: [name], dffPath: val1.toUpperCase(), setupAs, indPath });
                 }
             }
         }
 
-        return objDefs;
+        return defs;
     }
 
     public parseDFF(): CasperMesh {
