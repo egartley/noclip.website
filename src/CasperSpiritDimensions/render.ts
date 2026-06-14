@@ -2,13 +2,13 @@ import { mat4, vec3 } from "gl-matrix";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBindingLayoutDescriptor, GfxBlendFactor, GfxBlendMode, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
-import { CasperMesh, CasperTexture, CasperObjectInstance, CapserLevel, CasperBSPNode, CasperBone } from "./bin";
+import { CasperMesh, CasperTexture, CasperObjectInstance, CapserLevel, CasperBSPNode, CasperBone, CapserMaterialType, CasperMaterial } from "./bin";
 import { computeModelMatrixSRT, MathConstants } from "../MathHelpers";
 import { AABB } from "../Geometry";
 import { Layer } from "../ui";
@@ -16,7 +16,7 @@ import { computeViewMatrix } from "../Camera";
 import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 
 interface DrawCall {
-    textureName: string;
+    materialIndex: number;
     indexOffset: number;
     indexCount: number;
 }
@@ -38,6 +38,7 @@ class Shader extends DeviceProgram {
     public static a_Weight = 4;
     public static ub_SceneParams = 0;
     public static ub_InstanceParams = 1;
+    public static ub_DrawParams = 2;
 
     constructor(boneCount: number) {
         super();
@@ -53,6 +54,11 @@ layout(std140) uniform ub_SceneParams {
 
 layout(std140) uniform ub_InstanceParams {
     Mat4x4 u_View;
+};
+
+layout(std140) uniform ub_DrawParams {
+    vec4 u_MaterialColor;
+    float u_HasTexture;
 };
 
 uniform sampler2D u_Texture;
@@ -79,13 +85,17 @@ void main() {
 #ifdef FRAG
 void main() {
     if (u_ShowTextures > 0.1) {
-        vec4 color = texture(SAMPLER_2D(u_Texture), v_UV);
-        if (color.a < 0.1) {
-            discard;
+        if (u_HasTexture > 0.1) {
+            vec4 color = texture(SAMPLER_2D(u_Texture), v_UV);
+            if (color.a < 0.1) {
+                discard;
+            }
+            vec3 ambient = vec3(0.075); // close approx to PS2 appearance
+            color *= vec4(clamp(v_Color + ambient, 0.0, 1.0), 1.0);
+            gl_FragColor = color;
+        } else {
+            gl_FragColor = u_MaterialColor * vec4(v_Color, 1.0);
         }
-        vec3 ambient = vec3(0.075); // close approx to PS2 appearance
-        color *= vec4(clamp(v_Color + ambient, 0.0, 1.0), 1.0);
-        gl_FragColor = color;
     } else {
         gl_FragColor = vec4(v_Color, 1.0);
     }
@@ -95,7 +105,7 @@ void main() {
     }
 }
 
-const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 2, numSamplers: 1 }];
+const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 3, numSamplers: 1 }];
 const WORLD_SCALE = 300; // raw XYZ are extremely small
 const BACK_CULL_LEVELS = [5, 8, 9, 11, 12, 14]; // levels that are mostly interior
 const SCRATCH_VIEW = mat4.create();
@@ -112,29 +122,41 @@ export class CasperLevelRenderer {
     private gfxInputLayout: GfxInputLayout;
     private gfxProgram: GfxProgram;
     private gfxSampler: GfxSampler;
+    private materials: CasperMaterial[];
     public showTextures: boolean = true;
     public showObjects: boolean = true;
     public cullMode: GfxCullMode = GfxCullMode.None;
     public meshLayers: Layer[] = [];
 
-    constructor(cache: GfxRenderCache, private level: CapserLevel, private textures: Map<string, CasperTexture>, meshes: Map<string, CasperMesh>, objInstances: CasperObjectInstance[]) {
-        if (BACK_CULL_LEVELS.includes(this.level.number)) {
+    constructor(cache: GfxRenderCache, level: CapserLevel, private textures: Map<string, CasperTexture>, meshes: Map<string, CasperMesh>, objInstances: CasperObjectInstance[]) {
+        if (BACK_CULL_LEVELS.includes(level.number)) {
             this.cullMode = GfxCullMode.Back;
         }
 
-        const { vertices, indices, uvs, colors } = this.buildBuffersAndDrawCalls();
+        this.materials = level.materials;
+        const { vertices, indices, uvs, colors } = this.buildBuffersAndDrawCalls(level.root);
+        const validDrawCalls = this.drawCalls.filter(dc => this.materials[dc.materialIndex].type === CapserMaterialType.COLOR ||
+            (this.materials[dc.materialIndex].type === CapserMaterialType.TEXTURE && this.textures.get(this.materials[dc.materialIndex].name) !== undefined));
+        if (this.drawCalls.length !== validDrawCalls.length) {
+            console.warn(level.name, "has invalid texture materials",
+                this.drawCalls.filter(dc => this.materials[dc.materialIndex].type === CapserMaterialType.TEXTURE &&
+                this.textures.get(this.materials[dc.materialIndex].name) === undefined),
+                this.materials);
+        }
+        this.drawCalls = validDrawCalls;
+        this.drawCalls = this.drawCalls.filter(dc => this.textures.get(this.materials[dc.materialIndex].name) !== undefined);
         this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, indices.buffer), byteOffset: 0 };
         this.vertexBufferDescriptors = [
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertices.buffer), byteOffset: 0 },
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, colors.buffer), byteOffset: 0 },
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, uvs.buffer), byteOffset: 0 },
         ];
-        this.meshLayers.push({ name: this.level.name, visible: true, setVisible(v: boolean) { this.visible = v } });
+        this.meshLayers.push({ name: level.name, visible: true, setVisible(v: boolean) { this.visible = v } });
 
         for (const [name, mesh] of meshes.entries()) {
             const meshTextures = new Map<string, CasperTexture>();
-            for (const t of mesh.materials!) {
-                meshTextures.set(t, this.textures.get(t)!);
+            for (const t of mesh.materials!.filter(m => m.type === CapserMaterialType.TEXTURE)) {
+                meshTextures.set(t.name, this.textures.get(t.name)!);
             }
             this.objectRenderers.push(new MeshRenderer(cache, name, meshTextures, mesh, objInstances.filter(i => i.name === name)));
             this.meshLayers.push({ name, visible: true, setVisible(v: boolean) { this.visible = v } });
@@ -189,24 +211,30 @@ export class CasperLevelRenderer {
             renderInst.setVertexInput(this.gfxInputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
             renderInst.setGfxProgram(this.gfxProgram);
             for (const drawCall of this.drawCalls) {
-                const texture = this.textures.get(drawCall.textureName);
-                if (!texture) {
-                    // console.warn(batch.textureName);
-                    continue;
-                }
+                const material = this.materials[drawCall.materialIndex];
+
                 const renderInst = renderHelper.renderInstManager.newRenderInst();
-                const megaState = renderInst.getMegaStateFlags();
-                megaState.cullMode = this.cullMode;
-                if (texture.hasAlpha) {
-                    setAttachmentStateSimple(megaState, {
-                        blendMode: GfxBlendMode.Add,
-                        blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                        blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha
-                    });
+                let offset2 = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 5);
+                const uniformBuffer2 = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
+                // u_MaterialColor (4)
+                offset2 += fillVec4v(uniformBuffer2, offset2, material.color);
+                // u_HasTexture (1)
+                uniformBuffer2[offset2++] = material.type === CapserMaterialType.TEXTURE ? 1.0 : 0.0;
+
+                if (material.type === CapserMaterialType.TEXTURE) {
+                    const texture = this.textures.get(material.name)!;
+                    const megaState = renderInst.getMegaStateFlags();
+                    if (texture.hasAlpha) {
+                        setAttachmentStateSimple(megaState, {
+                            blendMode: GfxBlendMode.Add,
+                            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha
+                        });
+                    }
+                    renderInst.sortKey = this.sortKeys.get(texture.gfxTexture.ResourceName!)!;
+                    renderInst.setMegaStateFlags(megaState);
+                    renderInst.setSamplerBindingsFromTextureMappings([{ gfxTexture: texture.gfxTexture, gfxSampler: this.gfxSampler }]);
                 }
-                renderInst.sortKey = this.sortKeys.get(texture.gfxTexture.ResourceName!)!;
-                renderInst.setMegaStateFlags(megaState);
-                renderInst.setSamplerBindingsFromTextureMappings([{ gfxTexture: texture.gfxTexture, gfxSampler: this.gfxSampler }]);
                 renderInst.setDrawCount(drawCall.indexCount, drawCall.indexOffset);
                 renderHelper.renderInstManager.submitRenderInst(renderInst);
             }
@@ -214,9 +242,11 @@ export class CasperLevelRenderer {
             renderHelper.renderInstManager.popTemplate();
         }
 
-        for (const or of this.objectRenderers) {
-            if (this.meshLayers.find(m => m.name === or.name)!.visible) {
-                or.prepareToRender(device, renderHelper, viewerInput);
+        if (this.showObjects) {
+            for (const or of this.objectRenderers) {
+                if (this.meshLayers.find(m => m.name === or.name)!.visible) {
+                    or.prepareToRender(device, renderHelper, viewerInput);
+                }
             }
         }
     }
@@ -234,12 +264,12 @@ export class CasperLevelRenderer {
         }
     }
 
-    private buildBuffersAndDrawCalls(): MeshBufferData {
+    private buildBuffersAndDrawCalls(rootNode: CasperBSPNode): MeshBufferData {
         let vertexOffset = 0;
         const vertices: number[] = [];
         const colors: number[] = [];
         const uvs: number[] = [];
-        const indexGroups = new Map<string, number[]>();
+        const indexGroups = new Map<number, number[]>();
         const traverse = (node: CasperBSPNode) => {
             if (node.mesh && node.mesh.vertices.length > 0) {
                 const offsetBase = vertexOffset;
@@ -248,14 +278,14 @@ export class CasperLevelRenderer {
                 uvs.push(...node.mesh.uvs);
                 vertexOffset += node.mesh.vertices.length / 3;
                 for (const split of node.mesh.indexSplits) {
-                    const textureName = this.level.materials[split.materialIndex];
-                    if (textureName === undefined || textureName.length === 0) {
+                    const material = this.materials[split.materialIndex];
+                    if (material === undefined) {
                         continue;
                     }
-                    if (!indexGroups.has(textureName)) {
-                        indexGroups.set(textureName, []);
+                    if (!indexGroups.has(split.materialIndex)) {
+                        indexGroups.set(split.materialIndex, []);
                     }
-                    const groupIndices = indexGroups.get(textureName)!;
+                    const groupIndices = indexGroups.get(split.materialIndex)!;
                     for (const index of split.indices) {
                         groupIndices.push(index + offsetBase);
                     }
@@ -266,11 +296,11 @@ export class CasperLevelRenderer {
             }
         };
 
-        traverse(this.level.root);
+        traverse(rootNode);
 
         const indices: number[] = [];
-        indexGroups.forEach((groupIndices, textureName) => {
-            const batch = { textureName, indexOffset: indices.length, indexCount: groupIndices.length };
+        indexGroups.forEach((groupIndices, materialIndex) => {
+            const batch = { materialIndex, indexOffset: indices.length, indexCount: groupIndices.length };
             indices.push(...groupIndices);
             this.drawCalls.push(batch);
         });
@@ -288,9 +318,20 @@ class MeshRenderer {
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[] = [];
     private boneMatrices: mat4[] = [];
     private bones: CasperBone[] = [];
+    private materials: CasperMaterial[] = [];
 
     constructor(cache: GfxRenderCache, public name: string, private textures: Map<string, CasperTexture>, mesh: CasperMesh, private instances: CasperObjectInstance[]) {
         const { vertices, indices, uvs, colors, joints, weights } = this.buildBuffersAndDrawCalls(mesh);
+        this.materials = mesh.materials ? mesh.materials : [];
+        const validDrawCalls = this.drawCalls.filter(dc => this.materials[dc.materialIndex].type === CapserMaterialType.COLOR ||
+            (this.materials[dc.materialIndex].type === CapserMaterialType.TEXTURE && this.textures.get(this.materials[dc.materialIndex].name) !== undefined));
+        if (this.drawCalls.length !== validDrawCalls.length) {
+            console.warn(this.name, "has invalid texture materials",
+                this.drawCalls.filter(dc => this.materials[dc.materialIndex].type === CapserMaterialType.TEXTURE &&
+                this.textures.get(this.materials[dc.materialIndex].name) === undefined),
+                this.materials);
+        }
+        this.drawCalls = validDrawCalls;
         this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, indices.buffer), byteOffset: 0 };
         this.vertexBufferDescriptors = [
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertices.buffer), byteOffset: 0 },
@@ -335,6 +376,9 @@ class MeshRenderer {
             }
             this.bones = mesh.bones;
         }
+        // if (this.materials.filter(m => m.type === CapserMaterialType.COLOR).length > 0) {
+        //     console.log(this.materials, this.name);
+        // }
         
         this.gfxInputLayout = cache.createInputLayout({ vertexAttributeDescriptors, vertexBufferDescriptors: inVertexBufferDescriptors, indexBufferFormat: GfxFormat.U32_R });
         this.gfxSampler = cache.createSampler({
@@ -375,22 +419,29 @@ class MeshRenderer {
             offset += fillMatrix4x4(uniformBuffer, offset, SCRATCH_INSTANCE);
 
             for (const drawCall of this.drawCalls) {
-                const texture = this.textures.get(drawCall.textureName);
-                if (!texture) {
-                    // console.warn(batch.textureName);
-                    continue;
-                }
+                const material = this.materials[drawCall.materialIndex];
+
                 const renderInst = renderHelper.renderInstManager.newRenderInst();
-                const megaState = renderInst.getMegaStateFlags();
-                if (texture.hasAlpha) {
-                    setAttachmentStateSimple(megaState, {
-                        blendMode: GfxBlendMode.Add,
-                        blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                        blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha
-                    });
+                let offset2 = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 5);
+                const uniformBuffer2 = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
+                // u_MaterialColor (4)
+                offset2 += fillVec4v(uniformBuffer2, offset2, material.color);
+                // u_HasTexture (1)
+                uniformBuffer2[offset2++] = material.type === CapserMaterialType.TEXTURE ? 1.0 : 0.0;
+
+                if (material.type === CapserMaterialType.TEXTURE) {
+                    const texture = this.textures.get(material.name)!;
+                    const megaState = renderInst.getMegaStateFlags();
+                    if (texture.hasAlpha) {
+                        setAttachmentStateSimple(megaState, {
+                            blendMode: GfxBlendMode.Add,
+                            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha
+                        });
+                    }
+                    renderInst.setMegaStateFlags(megaState);
+                    renderInst.setSamplerBindingsFromTextureMappings([{ gfxTexture: texture.gfxTexture, gfxSampler: this.gfxSampler }]);
                 }
-                renderInst.setMegaStateFlags(megaState);
-                renderInst.setSamplerBindingsFromTextureMappings([{ gfxTexture: texture.gfxTexture, gfxSampler: this.gfxSampler }]);
                 renderInst.setDrawCount(drawCall.indexCount, drawCall.indexOffset);
                 renderHelper.renderInstManager.submitRenderInst(renderInst);
             }
@@ -421,19 +472,19 @@ class MeshRenderer {
     private buildBuffersAndDrawCalls(mesh: CasperMesh): MeshBufferData {
         const vertices: number[] = [];
         const colors: number[] = [];
-        const indexGroups = new Map<string, number[]>();
+        const indexGroups = new Map<number, number[]>();
         if (mesh.vertices.length > 0 && mesh.materials) {
             vertices.push(...mesh.vertices.map(p => p * WORLD_SCALE));
             colors.push(...mesh.colors.map(c => c / 255));
             for (const split of mesh.indexSplits) {
-                const textureName = mesh.materials[split.materialIndex];
-                if (textureName === undefined || textureName.length === 0) {
+                const material = mesh.materials[split.materialIndex];
+                if (material === undefined) {
                     continue;
                 }
-                if (!indexGroups.has(textureName)) {
-                    indexGroups.set(textureName, []);
+                if (!indexGroups.has(split.materialIndex)) {
+                    indexGroups.set(split.materialIndex, []);
                 }
-                const groupIndices = indexGroups.get(textureName)!;
+                const groupIndices = indexGroups.get(split.materialIndex)!;
                 for (const i of split.indices) {
                     groupIndices.push(i);
                 }
@@ -441,8 +492,8 @@ class MeshRenderer {
         }
 
         const indices: number[] = [];
-        indexGroups.forEach((groupIndices, textureName) => {
-            const drawCall = { textureName, indexOffset: indices.length, indexCount: groupIndices.length };
+        indexGroups.forEach((groupIndices, materialIndex) => {
+            const drawCall = { materialIndex, indexOffset: indices.length, indexCount: groupIndices.length };
             indices.push(...groupIndices);
             this.drawCalls.push(drawCall);
         });

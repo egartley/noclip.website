@@ -1,4 +1,4 @@
-import { mat3, mat4, vec3 } from "gl-matrix";
+import { mat3, mat4, vec3, vec4 } from "gl-matrix";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
 import { AABB } from "../Geometry";
 import ArrayBufferSlice from "../ArrayBufferSlice";
@@ -55,6 +55,11 @@ interface SkeletonData {
     weights: number[][];
 }
 
+export enum CapserMaterialType {
+    TEXTURE,
+    COLOR
+}
+
 export interface CasperBone {
     parentIndex: number;
     rot: mat3;
@@ -68,10 +73,16 @@ export interface CasperBSPNode {
 }
 
 export interface CapserLevel {
-    materials: string[];
+    materials: CasperMaterial[];
     root: CasperBSPNode;
     number: number;
     name: string;
+}
+
+export interface CasperMaterial {
+    name: string;
+    type: CapserMaterialType;
+    color: vec4;
 }
 
 /**
@@ -89,7 +100,7 @@ export interface CasperMesh {
     colors: number[];
     indexSplits: IndexSplit[];
     bones: CasperBone[];
-    materials?: string[];
+    materials?: CasperMaterial[];
     boundingSphere?: CasperBoundingSphere;
     skeletonData?: SkeletonData;
 }
@@ -130,7 +141,6 @@ export class CasperTexture {
 }
 
 const SCALE_OVERRIDES: Map<string, number[]> = new Map<string, number[]>([["needle2", [1, 1, 1]]]);
-const IGNORED_OBJS: string[] = ["6wall01", "6wall02", "6wall03", "6wall04", "6wall05", "robostand"];
 
 export class CasperRWParser {
     private data: DataView;
@@ -143,7 +153,7 @@ export class CasperRWParser {
     until the end of the file. It's not very clear what these are exactly, but the first X amount of
     them have the same last 4 bytes, and the number of these are equal to 1 less than the number of bones in the
     corresponding model (59 for casper himself, for example). The amount of remaining structures doesn't divide
-    evenly by the bone count, so they're aren't a simple list of bone transformations per frame type of thing.
+    evenly by the bone count, so they aren't a simple list of bone transformations per frame type of thing.
     If that were the case, then, for example, an entire walk animation might only have 12 frames, which wouldn't be right.
     These structures also end with 4 bytes of an increasing counter that goes up by 36 each time. This leaves 32 bytes for
     transformation data, with the last 4 of these possibly being a frame delta or something like that. There also isn't
@@ -195,7 +205,7 @@ export class CasperRWParser {
         return level;
     }
 
-    public parseDIC(device: GfxDevice, materials: string[]): Map<string, CasperTexture> {
+    public parseDIC(device: GfxDevice, materials: CasperMaterial[]): Map<string, CasperTexture> {
         this.offset = 0;
         const txdHeader = this.parseHeader();
         const txdEnd = this.offset + txdHeader.size;
@@ -214,7 +224,7 @@ export class CasperRWParser {
             const nameHeader = this.parseHeader();
             const textureName = this.readString(nameHeader.size);
             // only parse materials with known name
-            if (materials.indexOf(textureName) === -1) {
+            if (materials.filter(m => m.name === textureName).length === 0) {
                 this.offset = nativeEnd;
                 continue;
             }
@@ -329,9 +339,7 @@ export class CasperRWParser {
                 inProperties = false;
             } else if (!line.startsWith("//")) {
                 if (line.startsWith("END_OBJ:")) {
-                    if (IGNORED_OBJS.indexOf(instance.name) === -1) {
-                        instances.push(instance);
-                    }
+                    instances.push(instance);
                     instance = new CasperObjectInstance();
                 } else if (line.startsWith("BEGIN_USERPROPS:")) {
                     inProperties = true;
@@ -428,22 +436,19 @@ export class CasperRWParser {
             this.offset = geometryStructEnd;
             const materialListHeader = this.parseHeader();
             const materials = this.parseMaterialList(materialListHeader.size);
-            if (materials[0].length > 0) {
-                // temp don't build meshes without textures
-                const extensionHeader = this.parseHeader();
-                const splits: IndexSplit[] = [];
-                if (extensionHeader.id === Chunk.EXTENSION) {
-                    const binMeshHeader = this.parseHeader();
-                    if (binMeshHeader.id === Chunk.BIN_MESH_PLG) {
-                        splits.push(...this.parseBinMesh());
-                        mesh = {
-                            vertices: geometryData.vertices,
-                            uvs: geometryData.uvs, colors: geometryData.colors,
-                            indexSplits: splits, materials,
-                            bones: bones ? bones : [],
-                            boundingSphere: geometryData.boundingSphere
-                        };
-                    }
+            const extensionHeader = this.parseHeader();
+            const splits: IndexSplit[] = [];
+            if (extensionHeader.id === Chunk.EXTENSION) {
+                const binMeshHeader = this.parseHeader();
+                if (binMeshHeader.id === Chunk.BIN_MESH_PLG) {
+                    splits.push(...this.parseBinMesh());
+                    mesh = {
+                        vertices: geometryData.vertices,
+                        uvs: geometryData.uvs, colors: geometryData.colors,
+                        indexSplits: splits, materials,
+                        bones: bones ? bones : [],
+                        boundingSphere: geometryData.boundingSphere
+                    };
                 }
             }
         }
@@ -488,44 +493,51 @@ export class CasperRWParser {
         return sector;
     }
 
-    /**
-     * Empty or color-only materials are set as "" to keep material indices consistent
-     */
-    private parseMaterialList(size: number): string[] {
-        const names: string[] = [];
+    private parseMaterialList(size: number): CasperMaterial[] {
         const end = this.offset + size;
 
         const struct = this.parseHeader();
         const numMaterials = this.data.getInt32(this.offset, true);
         this.offset += struct.size;
 
+        const mats: CasperMaterial[] = Array(numMaterials);
         for (let i = 0; i < numMaterials; i++) {
             const matHeader = this.parseHeader();
             const matEnd = this.offset + matHeader.size;
 
-            while (this.offset < matEnd) {
-                const child = this.parseHeader();
-                if (this.data.getUint8(this.offset + 12) === 0) {
-                    names.push("");
-                    this.offset += child.size;
-                } else if (child.id === Chunk.TEXTURE) {
-                    const texEnd = this.offset + child.size;
-                    while (this.offset < texEnd) {
-                        const texChild = this.parseHeader();
-                        if (texChild.id === Chunk.STRING) {
-                            names.push(this.readString(texChild.size));
-                            this.offset = texEnd;
-                        } else {
-                            this.offset += texChild.size;
-                        }
+            const matStructHeader = this.parseHeader();
+            const matStructEnd = this.offset + matStructHeader.size;
+            this.offset += 4;
+            const color = vec4.fromValues(
+                this.data.getUint8(this.offset) / 255.0, this.data.getUint8(this.offset + 1) / 255.0,
+                this.data.getUint8(this.offset + 2) / 255.0, this.data.getUint8(this.offset + 3) / 255.0
+            );
+            this.offset += 8;
+            const textureCount = this.data.getUint32(this.offset, true);
+            this.offset = matStructEnd;
+
+            let name = "";
+            const type = textureCount > 0 ? CapserMaterialType.TEXTURE : CapserMaterialType.COLOR;
+            // assumes only 1 texture if material is textured
+            if (type === CapserMaterialType.TEXTURE) {
+                const texHeader = this.parseHeader();
+                const texEnd = this.offset + texHeader.size;
+                while (this.offset < texEnd) {
+                    const texChild = this.parseHeader();
+                    if (texChild.id === Chunk.STRING) {
+                        name = this.readString(texChild.size);
+                        this.offset = texEnd;
+                    } else {
+                        this.offset += texChild.size;
                     }
-                } else {
-                    this.offset += child.size;
                 }
             }
+            mats[i] = { name, type, color };
+            this.offset = matEnd;
         }
+
         this.offset = end;
-        return names;
+        return mats;
     }
 
     private parseAtomicSection(): CasperMesh {

@@ -5,7 +5,7 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper.js";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
-import { CasperMesh, CasperObjectDefinition, CasperRWParser, CasperTexture, CasperObjectInstance, CapserLevel } from "./bin.js";
+import { CasperMesh, CasperObjectDefinition, CasperRWParser, CasperTexture, CasperObjectInstance, CapserLevel, CapserMaterialType } from "./bin.js";
 import { CasperLevelRenderer } from "./render.js";
 import { Checkbox, COOL_BLUE_COLOR, LayerPanel, Panel, RENDER_HACKS_ICON } from "../ui.js";
 import { DataFetcher } from "../DataFetcher.js";
@@ -86,7 +86,7 @@ class Renderer implements SceneGfx {
             this.levelRenderer.cullMode = toggleBackFaceCull.checked ? GfxCullMode.Back : GfxCullMode.None
         };
         optionsPanel.contents.appendChild(toggleBackFaceCull.elem);
-        const toggleTextures = new Checkbox("Enable textures", true);
+        const toggleTextures = new Checkbox("Enable materials", true);
         toggleTextures.onchanged = () => {
             this.levelRenderer.showTextures = toggleTextures.checked
         };
@@ -132,6 +132,7 @@ Level objects
     Add different kinds, fix the ones currently ignored
     Idle animations, mix of plaintext and .ska files
 Remove hardcoded clear colors and read from actual data (might be from fog color)
+Combine level and mesh renderers' common code
 
 Nice to have
 
@@ -161,8 +162,14 @@ class Level implements SceneDesc {
         const objDefs = new CasperRWParser(obd).parseOBD();
         const instances = new CasperRWParser(tom).parseTOM();
         const objMeshes = await buildDFFMeshes(context.dataFetcher, level, objDefs, instances);
+        const meshMaterials = [];
+        for (const mesh of objMeshes.values()) {
+            if (mesh.materials) {
+                meshMaterials.push(...mesh.materials);
+            }
+        }
 
-        const textures = new CasperRWParser(dic).parseDIC(device, level.materials);
+        const textures = new CasperRWParser(dic).parseDIC(device, [...level.materials, ...meshMaterials]);
 
         return new Renderer(device, level, textures, objMeshes, instances);
     }
@@ -191,12 +198,11 @@ async function buildDFFMeshes(dataFetcher: DataFetcher, level: CapserLevel, objD
         }
         const dff = await dataFetcher.fetchData(`${pathBase}/${path}`);
         const mesh = new CasperRWParser(dff).parseDFF();
+        // console.log(instance.name, path);
         if (mesh.vertices.length === 0) {
             // console.log("Skipping OBJ by no vertices", instance.name);
             continue;
         }
-        // append to level materials so the textures don't get skipped
-        level.materials.push(...mesh.materials!);
         meshes.set(instance.name, mesh);
     }
     return meshes;
