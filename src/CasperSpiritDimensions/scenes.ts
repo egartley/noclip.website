@@ -5,7 +5,7 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper.js";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
-import { CasperMesh, CasperObjectDefinition, CasperRWParser, CasperTexture, CasperObjectInstance, CapserLevel, CapserMaterialType } from "./bin.js";
+import { CasperMesh, CasperObjectDefinition, CasperRWParser, CasperTexture, CasperObjectInstance, CapserLevel, CasperSKA } from "./bin.js";
 import { CasperLevelRenderer } from "./render.js";
 import { Checkbox, COOL_BLUE_COLOR, LayerPanel, Panel, RENDER_HACKS_ICON } from "../ui.js";
 import { DataFetcher } from "../DataFetcher.js";
@@ -27,7 +27,7 @@ class Renderer implements SceneGfx {
     private levelRenderer: CasperLevelRenderer;
     private clearColor: number[];
 
-    constructor(device: GfxDevice, level: CapserLevel, textures: Map<string, CasperTexture>, objMeshes: Map<string, CasperMesh>, objInstances: CasperObjectInstance[]) {
+    constructor(device: GfxDevice, level: CapserLevel, textures: Map<string, CasperTexture>, objMeshes: Map<string, CasperMesh>, objInstances: CasperObjectInstance[], skas: Map<string, CasperSKA>) {
         const viewerTextures: ViewerTexture[] = [];
         for (const texture of textures.values()) {
             viewerTextures.push({
@@ -38,7 +38,7 @@ class Renderer implements SceneGfx {
 
         this.textureHolder = new FakeTextureHolder(viewerTextures);
         this.renderHelper = new GfxRenderHelper(device);
-        this.levelRenderer = new CasperLevelRenderer(this.renderHelper.renderCache, level, textures, objMeshes, objInstances);
+        this.levelRenderer = new CasperLevelRenderer(this.renderHelper.renderCache, level, textures, objMeshes, objInstances, skas);
 
         this.clearColor = CLEAR_COLORS[level.number - 1];
         this.clearColor[0] /= 255;
@@ -139,6 +139,12 @@ Nice to have
 NPC/enemy pathing
 */
 
+const DFF_SKA_MAPPING: Map<string, string> = new Map([
+    ["lucky_chicken", "CKNLOOK1"],
+    ["casper", "IDLE01"],
+    //["wendy", "IDLE"]
+]);
+
 const pathBase = "CasperSD";
 class Level implements SceneDesc {
     public id: string;
@@ -171,7 +177,16 @@ class Level implements SceneDesc {
 
         const textures = new CasperRWParser(dic).parseDIC(device, [...level.materials, ...meshMaterials]);
 
-        return new Renderer(device, level, textures, objMeshes, instances);
+        const skas: Map<string, CasperSKA> = new Map();
+        for (const [dffName, skaName] of DFF_SKA_MAPPING) {
+            if (objMeshes.has(dffName)) {
+                const path = objDefs.find(d => d.names.includes(dffName))!.dffPath.replace(/\/[^\/]*$/, "");
+                const ska = await context.dataFetcher.fetchData(`${pathBase}/${path}/${skaName}.SKA`);
+                skas.set(dffName, new CasperRWParser(ska).parseSKA());
+            }
+        }
+
+        return new Renderer(device, level, textures, objMeshes, instances, skas);
     }
 }
 

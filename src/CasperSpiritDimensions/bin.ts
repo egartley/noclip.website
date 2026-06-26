@@ -1,9 +1,10 @@
-import { mat3, mat4, vec3, vec4 } from "gl-matrix";
+import { mat3, mat4, quat, vec3, vec4 } from "gl-matrix";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
 import { AABB } from "../Geometry";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 
 // Credit to the "RW Analyze" tool by Steve M. for helping to parse the RenderWare files
+// Also credit to the RenderWare documentation at https://github.com/electronicarts/RenderWare3Docs/tree/master/userguide (very helpful!)
 
 enum Chunk {
     STRUCT = 1,
@@ -53,6 +54,7 @@ interface GeometryData {
 interface SkeletonData {
     indices: number[][];
     weights: number[][];
+    inverseTransforms: mat4[];
 }
 
 export enum CapserMaterialType {
@@ -113,6 +115,23 @@ export interface CasperBoundingSphere {
     r: number;
 }
 
+export interface CasperAnimationTrack {
+    keyframes: CasperKeyframe[];
+}
+
+export interface CasperSKA {
+    totalDuration: number;
+    keyframes: CasperKeyframe[];
+}
+
+export interface CasperKeyframe {
+    rot: quat;
+    pos: vec3;
+    time: number;
+    offset: number;
+    previousOffset: number;
+}
+
 export class CasperObjectInstance {
     name: string = "";
     position: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
@@ -147,32 +166,8 @@ export class CasperRWParser {
     private data: DataView;
     private offset: number = 0;
 
-    /*
-    Note on animations
-
-    These are the .ska files. They begin with a count of 36-byte structures starting at 0xC and continuing
-    until the end of the file. It's not very clear what these are exactly, but the first X amount of
-    them have the same last 4 bytes, and the number of these are equal to 1 less than the number of bones in the
-    corresponding model (59 for casper himself, for example). The amount of remaining structures doesn't divide
-    evenly by the bone count, so they aren't a simple list of bone transformations per frame type of thing.
-    If that were the case, then, for example, an entire walk animation might only have 12 frames, which wouldn't be right.
-    These structures also end with 4 bytes of an increasing counter that goes up by 36 each time. This leaves 32 bytes for
-    transformation data, with the last 4 of these possibly being a frame delta or something like that. There also isn't
-    any obvious way to tie any particular structure to a bone by an ID or index, other than the aforementioned beginning
-    structures being equal in count to 1 less than the model's bone count (which assumedly is sequential, starting after the root bone).
-    There may be a bit-wise mask or some other annoying way to identify what data goes to what bone per frame, or even how many
-    frames there should be to begin with. RW Analyze does not recognize the files either, so they might be entirely custom from standard RenderWare.
-    */
-
     constructor(buffer: ArrayBufferSlice) {
         this.data = buffer.createDataView();
-    }
-
-    private parseHeader(): NodeHeader {
-        const id = this.data.getUint32(this.offset, true);
-        const size = this.data.getUint32(this.offset + 4, true);
-        this.offset += 12;
-        return { id, size };
     }
 
     public parseBSP(name: string, number: number): CapserLevel {
@@ -469,6 +464,39 @@ export class CasperRWParser {
         return mesh;
     }
 
+    public parseSKA(): CasperSKA {
+        // based on RW manual, vol 2, section 16.4.4
+        const keyframeCount = this.data.getUint32(0, true);
+        const totalDuration = this.data.getFloat32(8, true) * 1000;
+        this.offset = 12;
+        const keyframes: CasperKeyframe[] = Array(keyframeCount);
+        for (let i = 0; i < keyframeCount; i++) {
+            const offset = this.offset - 12;
+            const rot = quat.fromValues(
+                this.data.getFloat32(this.offset, true), this.data.getFloat32(this.offset + 4, true),
+                this.data.getFloat32(this.offset + 8, true), this.data.getFloat32(this.offset + 12, true)
+            );
+            this.offset += 16;
+            const pos = vec3.fromValues(
+                this.data.getFloat32(this.offset, true), this.data.getFloat32(this.offset + 4, true),
+                this.data.getFloat32(this.offset + 8, true)
+            );
+            this.offset += 12;
+            const time = this.data.getFloat32(this.offset, true) * 1000;
+            const previousOffset = this.data.getUint32(this.offset + 4, true);
+            this.offset += 8;
+            keyframes[i] = { rot, pos, time, offset, previousOffset };
+        }
+        return { totalDuration, keyframes };
+    }
+
+    private parseHeader(): NodeHeader {
+        const id = this.data.getUint32(this.offset, true);
+        const size = this.data.getUint32(this.offset + 4, true);
+        this.offset += 12;
+        return { id, size };
+    }
+
     private parsePlaneSection(header: NodeHeader): CasperBSPNode {
         const endOffset = this.offset + header.size;
         const sector: CasperBSPNode = {
@@ -721,12 +749,13 @@ export class CasperRWParser {
     }
 
     private parseSkeleton(): CasperBone[] {
-        // RW Analzye calls this data "frames" but it's actually just the skeleton, confirmed with debug visualizing
+        // referred to as "frames" in RW lingo
         let pointer = this.offset;
         const boneCount = this.data.getUint32(pointer, true);
         const bones: CasperBone[] = Array(boneCount);
         pointer += 4;
         for (let i = 0; i < boneCount; i++) {
+            // this is the "modeling matrix"
             bones[i] = {
                 rot: mat3.fromValues(
                     this.data.getFloat32(pointer, true), this.data.getFloat32(pointer + 4, true), this.data.getFloat32(pointer + 8, true),
@@ -744,6 +773,7 @@ export class CasperRWParser {
     }
 
     private parseSkeletonData(): SkeletonData {
+        // pulled from RW manual, vol 2, section 13.2.2
         let pointer = this.offset;
         const boneCount = this.data.getUint32(pointer, true);
         const vertexCount = this.data.getUint32(pointer + 4, true);
@@ -771,27 +801,22 @@ export class CasperRWParser {
             pointer += 16;
         }
 
-        // these are not the bones, idk what they are but RW Analyze calls them bones even though they aren't
-        // could be absolute transform matrices for each bone? the matrices in the bones themselves are relative
-        // const bones: Bone[] = Array(boneCount);
-        // for (let i = 0; i < boneCount; i++) {
-        //     const num1 = this.data.getUint32(pointer, true);
-        //     const num2 = this.data.getUint32(pointer + 4, true);
-        //     const num3 = this.data.getUint32(pointer + 8, true);
-        //     pointer += 12;
-        //     bones[i] = {
-        //         num1, num2, num3,
-        //         matrix: mat4.fromValues(
-        //             this.data.getFloat32(pointer, true), this.data.getFloat32(pointer + 4, true), this.data.getFloat32(pointer + 8, true), this.data.getFloat32(pointer + 12, true),
-        //             this.data.getFloat32(pointer + 16, true), this.data.getFloat32(pointer + 20, true), this.data.getFloat32(pointer + 24, true), this.data.getFloat32(pointer + 28, true),
-        //             this.data.getFloat32(pointer + 32, true), this.data.getFloat32(pointer + 36, true), this.data.getFloat32(pointer + 40, true), this.data.getFloat32(pointer + 44, true),
-        //             this.data.getFloat32(pointer + 48, true), this.data.getFloat32(pointer + 52, true), this.data.getFloat32(pointer + 56, true), this.data.getFloat32(pointer + 60, true)
-        //         )
-        //     };
-        //     pointer += 64;
-        // }
+        const inverseTransforms: mat4[] = Array(boneCount);
+        for (let i = 0; i < boneCount; i++) {
+            // const num1 = this.data.getUint32(pointer, true); // 2000 + index
+            // const num2 = this.data.getUint32(pointer + 4, true); // index
+            // const num3 = this.data.getUint32(pointer + 8, true); // 8, 9, 10 or 11
+            pointer += 12;
+            inverseTransforms[i] = mat4.fromValues(
+                this.data.getFloat32(pointer, true), this.data.getFloat32(pointer + 4, true), this.data.getFloat32(pointer + 8, true), this.data.getFloat32(pointer + 12, true),
+                this.data.getFloat32(pointer + 16, true), this.data.getFloat32(pointer + 20, true), this.data.getFloat32(pointer + 24, true), this.data.getFloat32(pointer + 28, true),
+                this.data.getFloat32(pointer + 32, true), this.data.getFloat32(pointer + 36, true), this.data.getFloat32(pointer + 40, true), this.data.getFloat32(pointer + 44, true),
+                this.data.getFloat32(pointer + 48, true), this.data.getFloat32(pointer + 52, true), this.data.getFloat32(pointer + 56, true), this.data.getFloat32(pointer + 60, true)
+            );
+            pointer += 64;
+        }
 
-        return { indices, weights };
+        return { indices, weights, inverseTransforms };
     }
 
     private readString(size: number): string {
