@@ -12,6 +12,7 @@ import { DataFetcher } from "../DataFetcher.js";
 import { Texture as ViewerTexture } from "../viewer.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { CameraController } from "../Camera.js";
+import * as rw from 'librw';
 
 const CLEAR_COLORS: number[][] = [
     [34, 35, 45], [91, 123, 68], [34, 35, 45], [11, 16, 29],
@@ -117,20 +118,15 @@ The RW Analyze tool can be used to read most of the files if you remove the exte
 
 TODO
 
-Figure out animation data format (partially done, see notes in bin.ts)
-Add frustum culling for base level geometry by node bboxes (need to check if nodes actually have bboxes)
-    This isn't really needed since performance is not a problem, but good to have nonetheless
 Figure out X and Z for rotations (inconsistent across different objects)
     Example the grate and gems in snowy town
 Figure out lava in dragon's cave
 Figure out why some objects with meshes in TOM don't render
     Example the cannon in the amusement park
-Figure out normals/lighting
 Figure out how some objects/texture without alpha names are set to be transparent
     Example casper himself or kibosh
 Level objects
     Add different kinds, fix the ones currently ignored
-    Idle animations, mix of plaintext and .ska files
 Remove hardcoded clear colors and read from actual data (might be from fog color)
 Combine level and mesh renderers' common code
 
@@ -140,8 +136,8 @@ NPC/enemy pathing
 */
 
 const DFF_SKA_MAPPING: Map<string, string> = new Map([
-    ["lucky_chicken", "CKNLOOK1"],
-    ["casper", "IDLE01"],
+    // ["lucky_chicken", "CKNPECK1"],
+    // ["casper", "IDLE01"],
     //["wendy", "IDLE"]
 ]);
 
@@ -157,7 +153,6 @@ class Level implements SceneDesc {
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
-        device.checkForLeaks();
         const bsp = await context.dataFetcher.fetchData(`${pathBase}/MODELS/${this.bspPath}`);
         const dic = await context.dataFetcher.fetchData(`${pathBase}/MODELS/LEVEL${this.levelNumber}.DIC`);
         const tom = await context.dataFetcher.fetchData(`${pathBase}/SCRIPTC/${this.id}/M${this.id}.TOM`);
