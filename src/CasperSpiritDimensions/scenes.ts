@@ -136,7 +136,7 @@ NPC/enemy pathing
 */
 
 const DFF_SKA_MAPPING: Map<string, string> = new Map([
-    // ["lucky_chicken", "CKNPECK1"],
+    ["lucky_chicken", "CKNLOOK1"],
     // ["casper", "IDLE01"],
     //["wendy", "IDLE"]
 ]);

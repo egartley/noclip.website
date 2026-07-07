@@ -51,7 +51,7 @@ interface GeometryData {
     boundingSphere: CasperBoundingSphere;
 }
 
-interface SkeletonData {
+interface SkinningData {
     indices: number[][];
     weights: number[][];
     inverseTransforms: mat4[];
@@ -62,7 +62,7 @@ export enum CapserMaterialType {
     COLOR
 }
 
-export interface CasperBone {
+export interface CasperFrame {
     parentIndex: number;
     rot: mat3;
     pos: vec3;
@@ -102,10 +102,10 @@ export interface CasperMesh {
     uvs: number[];
     colors: number[];
     indexSplits: IndexSplit[];
-    bones: CasperBone[];
+    frames: CasperFrame[];
     materials?: CasperMaterial[];
     boundingSphere?: CasperBoundingSphere;
-    skeletonData?: SkeletonData;
+    skinningData?: SkinningData;
 }
 
 export interface CasperBoundingSphere {
@@ -410,20 +410,20 @@ export class CasperRWParser {
         const clumpHeader = this.parseHeader();
         const clumpStructHeader = this.parseHeader(); // struct is just object count, ignore
         this.offset += clumpStructHeader.size;
-        const skeletonHeader = this.parseHeader();
-        const skeletonEnd = this.offset + skeletonHeader.size;
-        let bones;
-        if (skeletonHeader.id === Chunk.FRAME_LIST) {
-            const skeletonStructHeader = this.parseHeader();
-            bones = this.parseSkeleton();
+        const frameHeader = this.parseHeader();
+        const frameEnd = this.offset + frameHeader.size;
+        let frames;
+        if (frameHeader.id === Chunk.FRAME_LIST) {
+            const frameListHeader = this.parseHeader();
+            frames = this.parseFrames();
         }
-        this.offset = skeletonEnd;
+        this.offset = frameEnd;
         const geometryListHeader = this.parseHeader();
         const geometryListEnd = this.offset + geometryListHeader.size;
         const geometryListStructHeader = this.parseHeader();
         this.offset += geometryListStructHeader.size;
         const geometryHeader = this.parseHeader();
-        let mesh: CasperMesh = { vertices: [], uvs: [], colors: [], indexSplits: [], materials: [], bones: [] };
+        let mesh: CasperMesh = { vertices: [], uvs: [], colors: [], indexSplits: [], materials: [], frames: [] };
         if (geometryHeader.id === Chunk.GEOMETRY) {
             const geometryStructHeader = this.parseHeader();
             const geometryStructEnd = this.offset + geometryStructHeader.size;
@@ -441,7 +441,7 @@ export class CasperRWParser {
                         vertices: geometryData.vertices,
                         uvs: geometryData.uvs, colors: geometryData.colors,
                         indexSplits: splits, materials,
-                        bones: bones ? bones : [],
+                        frames: frames ? frames : [],
                         boundingSphere: geometryData.boundingSphere
                     };
                 }
@@ -456,8 +456,8 @@ export class CasperRWParser {
             if (extensionHeader.id == Chunk.EXTENSION) {
                 const skinHeader = this.parseHeader();
                 if (skinHeader.id == Chunk.SKIN_PLG) {
-                    const skeletonData = this.parseSkeletonData();
-                    mesh.skeletonData = skeletonData;
+                    const skinData = this.parseSkinPLG();
+                    mesh.skinningData = skinData;
                 }
             }
         }
@@ -575,7 +575,7 @@ export class CasperRWParser {
         const vertexCount = this.data.getUint32(this.offset + 8, true);
         if (vertexCount === 0) {
             this.offset = structEnd;
-            return { vertices: [], uvs: [], colors: [], indexSplits: [], bones: [] };
+            return { vertices: [], uvs: [], colors: [], indexSplits: [], frames: [] };
         }
 
         // vertices (12), unknown colors (4), vertex colors (4), uvs (8)
@@ -627,7 +627,7 @@ export class CasperRWParser {
 
         this.offset = extEnd;
 
-        return { vertices, uvs, colors, indexSplits, bones: [] };
+        return { vertices, uvs, colors, indexSplits, frames: [] };
     }
 
     private parseBinMesh(): IndexSplit[] {
@@ -748,14 +748,15 @@ export class CasperRWParser {
         return { vertices, uvs, colors, boundingSphere };
     }
 
-    private parseSkeleton(): CasperBone[] {
-        // referred to as "frames" in RW lingo
+    private parseFrames(): CasperFrame[] {
+        // "frames" in RW lingo are effectively just bones for purposes here
         let pointer = this.offset;
         const boneCount = this.data.getUint32(pointer, true);
-        const bones: CasperBone[] = Array(boneCount);
+        const bones: CasperFrame[] = Array(boneCount);
         pointer += 4;
         for (let i = 0; i < boneCount; i++) {
-            // this is the "modeling matrix"
+            // this is the "modeling matrix" (e.g. the relative transform)
+            // the absolute transform is referred to as the "local transform matrix" or ltm
             bones[i] = {
                 rot: mat3.fromValues(
                     this.data.getFloat32(pointer, true), this.data.getFloat32(pointer + 4, true), this.data.getFloat32(pointer + 8, true),
@@ -772,7 +773,7 @@ export class CasperRWParser {
         return bones;
     }
 
-    private parseSkeletonData(): SkeletonData {
+    private parseSkinPLG(): SkinningData {
         // pulled from RW manual, vol 2, section 13.2.2
         let pointer = this.offset;
         const boneCount = this.data.getUint32(pointer, true);

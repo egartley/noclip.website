@@ -1,4 +1,4 @@
-import { mat4, quat, vec3 } from "gl-matrix";
+import { mat4, quat, ReadonlyMat4, vec3 } from "gl-matrix";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
@@ -8,11 +8,13 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
-import { CasperMesh, CasperTexture, CasperObjectInstance, CapserLevel, CasperBSPNode, CasperBone, CapserMaterialType, CasperMaterial, CasperSKA, CasperAnimationTrack, CasperKeyframe } from "./bin";
-import { computeModelMatrixSRT, lerp, MathConstants } from "../MathHelpers";
+import { CasperMesh, CasperTexture, CasperObjectInstance, CapserLevel, CasperBSPNode, CasperFrame, CapserMaterialType, CasperMaterial, CasperSKA, CasperAnimationTrack, CasperKeyframe } from "./bin";
+import { calcEulerAngleRotationFromSRTMatrix, computeModelMatrixSRT, lerp, Mat4Identity, MathConstants } from "../MathHelpers";
 import { AABB } from "../Geometry";
 import { Layer } from "../ui";
 import { computeViewMatrix } from "../Camera";
+import { drawWorldSpaceLine, drawWorldSpaceText, getDebugOverlayCanvas2D } from "../DebugJunk";
+import { White } from "../Color";
 
 interface DrawCall {
     materialIndex: number;
@@ -119,6 +121,8 @@ const BACK_CULL_LEVELS = [5, 8, 9, 11, 12, 14]; // levels that are mostly interi
 const SCRATCH_VIEW = mat4.create();
 const SCRATCH_INSTANCE = mat4.create();
 const SCRATCH_BONE = mat4.create();
+const SCRATCH_QUAT = quat.create();
+const SCRATCH_POS = vec3.create();
 const scratchVec3a = vec3.create();
 const scratchVec3b = vec3.create();
 
@@ -321,6 +325,16 @@ export class CasperLevelRenderer {
     }
 }
 
+function decomposeBoneTransform(transform: ReadonlyMat4): { scale: vec3, rotation: vec3, translation: vec3 } {
+    const scale = vec3.create();
+    const rotation = vec3.create();
+    const translation = vec3.create();
+    mat4.getScaling(scale, transform);
+    calcEulerAngleRotationFromSRTMatrix(rotation, transform);
+    mat4.getTranslation(translation, transform);
+    return { scale, rotation, translation };
+}
+
 class MeshRenderer {
     private drawCalls: DrawCall[] = [];
     private gfxInputLayout: GfxInputLayout;
@@ -328,8 +342,8 @@ class MeshRenderer {
     private gfxProgram: GfxProgram;
     private indexBufferDescriptor: GfxIndexBufferDescriptor;
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[] = [];
-    private boneMatrices: mat4[] = [];
-    private bones: CasperBone[] = [];
+    private localTransformMatrices: mat4[] = [];
+    private frames: CasperFrame[] = [];
     private inverseTransforms: mat4[] = [];
     private materials: CasperMaterial[] = [];
     private animationTracks: CasperAnimationTrack[] = [];
@@ -365,44 +379,41 @@ class MeshRenderer {
             { byteStride: 8, frequency: GfxVertexBufferFrequency.PerVertex }
         ];
 
-        if (mesh.skeletonData) {
+        if (mesh.skinningData) {
             this.vertexBufferDescriptors.push({ buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, joints!.buffer), byteOffset: 0 });
             this.vertexBufferDescriptors.push({ buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, weights!.buffer), byteOffset: 0 });
             vertexAttributeDescriptors.push({ location: Shader.a_Joint, bufferIndex: Shader.a_Joint, format: GfxFormat.U8_RGBA, bufferByteOffset: 0 });
             vertexAttributeDescriptors.push({ location: Shader.a_Weight, bufferIndex: Shader.a_Weight, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 });
             inVertexBufferDescriptors.push({ byteStride: 4, frequency: GfxVertexBufferFrequency.PerVertex });
             inVertexBufferDescriptors.push({ byteStride: 16, frequency: GfxVertexBufferFrequency.PerVertex });
-            // remove root bone to make indices consistent across frames/bones/animation tracks
-            this.bones = mesh.bones.slice(1);
-            this.boneMatrices = Array(this.bones.length);
-            this.inverseTransforms = Array(this.bones.length);//[...mesh.skeletonData.inverseTransforms];
-            for (let i = 0; i < this.bones.length; i++) {
-                this.bones[i].parentIndex -= 1;
-                this.boneMatrices[i] = mat4.create();
-                this.inverseTransforms[i] = mat4.create();
-                computeModelMatrixSRT(this.boneMatrices[i], 1, 1, 1, 0, 0, 0,
-                    this.bones[i].pos[0], this.bones[i].pos[1], this.bones[i].pos[2]
-                );
+
+            this.frames = mesh.frames.slice(1);
+            this.localTransformMatrices = Array(this.frames.length);
+            this.inverseTransforms = [...mesh.skinningData.inverseTransforms];
+            for (let i = 0; i < this.frames.length; i++) {
+                this.frames[i].parentIndex -= 1;
+                this.localTransformMatrices[i] = mat4.create();
+                //this.inverseTransforms[i] = mat4.create();
+                mat4.translate(this.localTransformMatrices[i], this.localTransformMatrices[i], this.frames[i].pos);
                 // expand rotation 3x3 into 4x4, then apply to srt (rather than decomposing into srt)
                 const rot = mat4.fromValues(
-                    this.bones[i].rot[0], this.bones[i].rot[1], this.bones[i].rot[2], 0,
-                    this.bones[i].rot[3], this.bones[i].rot[4], this.bones[i].rot[5], 0,
-                    this.bones[i].rot[6], this.bones[i].rot[7], this.bones[i].rot[8], 0,
+                    this.frames[i].rot[0], this.frames[i].rot[1], this.frames[i].rot[2], 0,
+                    this.frames[i].rot[3], this.frames[i].rot[4], this.frames[i].rot[5], 0,
+                    this.frames[i].rot[6], this.frames[i].rot[7], this.frames[i].rot[8], 0,
                     0, 0, 0, 1
                 );
-                mat4.mul(this.boneMatrices[i], this.boneMatrices[i], rot);
-                if (this.bones[i].parentIndex >= 0) {
-                    mat4.mul(this.boneMatrices[i], this.boneMatrices[this.bones[i].parentIndex], this.boneMatrices[i]);
+                mat4.mul(this.localTransformMatrices[i], this.localTransformMatrices[i], rot);
+                if (this.frames[i].parentIndex >= 0) {
+                    mat4.mul(this.localTransformMatrices[i], this.localTransformMatrices[this.frames[i].parentIndex], this.localTransformMatrices[i]);
                 }
-                mat4.invert(this.inverseTransforms[i], this.boneMatrices[i]);
+                //mat4.invert(this.inverseTransforms[i], this.localTransformMatrices[i]);
             }
 
             if (ska) {
-                // node/frame/bone order is implicit (ugh!), based on RW manual, vol 2, section 15.3
+                // node/frame/bone order is implicit, based on RW manual, vol 2, section 15.3
                 // it's essentially a linked list of keyframes per bone, determined by offsets
-                this.animationTracks = Array(this.bones.length);
-                // console.log(ska);
-                for (let i = 0; i < this.bones.length; i++) {
+                this.animationTracks = Array(this.frames.length);
+                for (let i = 0; i < this.frames.length; i++) {
                     const track: CasperAnimationTrack = { keyframes: [ska.keyframes[i]] };
                     let hasNext = true;
                     let keyframe = ska.keyframes[i];
@@ -417,7 +428,6 @@ class MeshRenderer {
                     }
                     this.animationTracks[i] = track;
                 }
-                // console.log(name, this.animationTracks, this.bones);
             }
         }
         
@@ -429,7 +439,7 @@ class MeshRenderer {
             wrapS: GfxWrapMode.Repeat,
             wrapT: GfxWrapMode.Repeat
         });
-        this.gfxProgram = cache.createProgram(new Shader(mesh.skeletonData ? this.bones.length : 0));
+        this.gfxProgram = cache.createProgram(new Shader(mesh.skinningData ? this.frames.length : 0));
 
         const bs = mesh.boundingSphere!;
         for (const instance of this.instances) {
@@ -458,14 +468,14 @@ class MeshRenderer {
             const instance = this.instances[i];
             const template = renderHelper.renderInstManager.pushTemplate();
 
-            let offset = template.allocateUniformBuffer(Shader.ub_InstanceParams, 12 + (12 * this.bones.length));
+            let offset = template.allocateUniformBuffer(Shader.ub_InstanceParams, 12 + (12 * this.frames.length));
             const uniformBuffer = template.mapUniformBufferF32(Shader.ub_InstanceParams);
             // u_View (12)
             mat4.mul(SCRATCH_INSTANCE, SCRATCH_VIEW, instance.shiftMatrix);
             offset += fillMatrix4x3(uniformBuffer, offset, SCRATCH_INSTANCE);
             // u_BoneSRT (12 * boneCount)
-            for (let i = 0; i < this.bones.length; i++) {
-                mat4.mul(SCRATCH_BONE, this.boneMatrices[i], this.inverseTransforms[i]);
+            for (let i = 0; i < this.frames.length; i++) {
+                mat4.mul(SCRATCH_BONE, this.localTransformMatrices[i], this.inverseTransforms[i]);
                 offset += fillMatrix4x3(uniformBuffer, offset, SCRATCH_BONE);
             }
 
@@ -496,19 +506,19 @@ class MeshRenderer {
                 renderInst.setDrawCount(drawCall.indexCount, drawCall.indexOffset);
                 renderHelper.renderInstManager.submitRenderInst(renderInst);
             }
-            // if (this.boneMatrices.length > 0 && this.instances.indexOf(instance) === 0) {
-            //     const ctx = getDebugOverlayCanvas2D();
-            //     for (let i = 0; i < this.boneMatrices.length; i++) {
-            //         vec3.set(scratchVec3a, 0, 0, 0);
-            //         mat4.mul(SCRATCH_BONE, instance.shiftMatrix, this.bones[i].parentIndex >= 0 ? this.boneMatrices[this.bones[i].parentIndex] : Mat4Identity);
-            //         vec3.transformMat4(scratchVec3a, scratchVec3a, SCRATCH_BONE);
-            //         vec3.set(scratchVec3b, 0, 0, 0);
-            //         mat4.mul(SCRATCH_BONE, instance.shiftMatrix, this.boneMatrices[i]);
-            //         vec3.transformMat4(scratchVec3b, scratchVec3b, SCRATCH_BONE);
-            //         drawWorldSpaceLine(ctx, viewerInput.camera.clipFromWorldMatrix, scratchVec3a, scratchVec3b);
-            //         drawWorldSpaceText(ctx, viewerInput.camera.clipFromWorldMatrix, scratchVec3b, `${i}`, 0, White);
-            //     }
-            // }
+            if (this.localTransformMatrices.length > 0 && this.instances.indexOf(instance) === 0) {
+                const ctx = getDebugOverlayCanvas2D();
+                for (let i = 0; i < this.localTransformMatrices.length; i++) {
+                    vec3.set(scratchVec3a, 0, 0, 0);
+                    mat4.mul(SCRATCH_BONE, instance.shiftMatrix, this.frames[i].parentIndex >= 0 ? this.localTransformMatrices[this.frames[i].parentIndex] : Mat4Identity);
+                    vec3.transformMat4(scratchVec3a, scratchVec3a, SCRATCH_BONE);
+                    vec3.set(scratchVec3b, 0, 0, 0);
+                    mat4.mul(SCRATCH_BONE, instance.shiftMatrix, this.localTransformMatrices[i]);
+                    vec3.transformMat4(scratchVec3b, scratchVec3b, SCRATCH_BONE);
+                    drawWorldSpaceLine(ctx, viewerInput.camera.clipFromWorldMatrix, scratchVec3a, scratchVec3b);
+                    drawWorldSpaceText(ctx, viewerInput.camera.clipFromWorldMatrix, scratchVec3b, `${i}`, 0, White);
+                }
+            }
 
             renderHelper.renderInstManager.popTemplate();
         }
@@ -524,19 +534,13 @@ class MeshRenderer {
     }
 
     private computeBoneMatrices() {
-        for (let i = 0; i < this.bones.length; i++) {
+        for (let i = 0; i < this.frames.length; i++) {
             const { current, next, t } = this.getKeyframePair(this.animationTracks[i]);
-            mat4.fromRotationTranslation(this.boneMatrices[i],
-                quat.fromValues(
-                    lerp(current.rot[0], next.rot[0], t), lerp(current.rot[1], next.rot[1], t),
-                    lerp(current.rot[2], next.rot[2], t), lerp(current.rot[3], next.rot[3], t)
-                ),
-                vec3.fromValues(
-                    lerp(current.pos[0], next.pos[0], t), lerp(current.pos[1], next.pos[1], t), lerp(current.pos[2], next.pos[2], t)
-                )
-            );
-            if (this.bones[i].parentIndex >= 0) {
-                mat4.mul(this.boneMatrices[i], this.boneMatrices[this.bones[i].parentIndex], this.boneMatrices[i]);
+            quat.slerp(SCRATCH_QUAT, current.rot, next.rot, t);
+            vec3.lerp(SCRATCH_POS, current.pos, next.pos, t);
+            mat4.fromRotationTranslation(this.localTransformMatrices[i], SCRATCH_QUAT, SCRATCH_POS);
+            if (this.frames[i].parentIndex >= 0) {
+                mat4.mul(this.localTransformMatrices[i], this.localTransformMatrices[this.frames[i].parentIndex], this.localTransformMatrices[i]);
             }
         }
     }
@@ -592,13 +596,13 @@ class MeshRenderer {
 
         let joints;
         let weights;
-        if (mesh.skeletonData) {
+        if (mesh.skinningData) {
             joints = [];
-            for (const j of mesh.skeletonData!.indices) {
+            for (const j of mesh.skinningData!.indices) {
                 joints.push(...j);
             }
             weights = [];
-            for (const w of mesh.skeletonData!.weights) {
+            for (const w of mesh.skinningData!.weights) {
                 weights.push(...w);
             }
             joints = new Uint8Array(joints);
