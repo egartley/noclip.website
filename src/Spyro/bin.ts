@@ -611,7 +611,7 @@ export function parseSpyroMobyInstances(subfile4: DataView, gameNumber: number):
     return mobys;
 }
 
-export function parseSpyroLevelData(data: ArrayBufferSlice): SpyroLevelData {
+export function parseSpyroLevelData(data: ArrayBufferSlice, isStandardLevel: boolean): SpyroLevelData {
     let pointer = 0;
     function getUint32() {
         return new Uint32Array(data.arrayBuffer, pointer, 4)[0];
@@ -637,23 +637,15 @@ export function parseSpyroLevelData(data: ArrayBufferSlice): SpyroLevelData {
 
     // sky
     pointer += groundSize;
-    let skySize = getUint32();
-    pointer += 4;
-    const ret = pointer;
-    const firstSkyCount = skySize;
-    pointer += skySize - 4;
-    skySize = getUint32();
-    if (skySize > 3) {
-        pointer += skySize;
-        skySize = getUint32();
-        pointer += skySize;
-        skySize = getUint32();
-        pointer += 4;
-    } else {
-        // cutscenes & flyover levels get here
-        pointer = ret;
-        skySize = firstSkyCount;
+    if (isStandardLevel) {
+        // skip unknown parts section and two other unknown sections
+        for (let i = 0; i < 3; i++) {
+            const sectionSize = getUint32();
+            pointer += sectionSize;
+        }
     }
+    const skySize = getUint32();
+    pointer += 4;
     const sky = data.subarray(pointer, skySize);
 
     let subfile4;

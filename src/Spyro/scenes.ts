@@ -154,7 +154,7 @@ class S1Level implements SceneDesc {
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
         const levelFile = await context.dataFetcher.fetchData(`${pathBase}/sf${this.subfileID}.bin`);
-        const { vram, textureList, ground, sky, subfile4 } = parseSpyroLevelData(levelFile);
+        const { vram, textureList, ground, sky, subfile4 } = parseSpyroLevelData(levelFile, this.subfileID >= 11 && this.subfileID <= 79);
         const mobys = subfile4 ? parseSpyroMobyInstances(subfile4.createDataView(), this.gameNumber) : [];
         const textures = parseSpyroTextures(vram, textureList.createDataView(), this.gameNumber);
         const level = buildSpyroLevel(ground.createDataView(), textures, this.gameNumber, this.subfileID);
