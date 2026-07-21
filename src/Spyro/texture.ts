@@ -1,17 +1,12 @@
 import { vec2, vec4 } from "gl-matrix";
-import { SpyroVRAM } from "./bin";
+import { parseSpyroTextureHeaders, SpyroTextureHeader, SpyroVRAM } from "./bin";
 
 export interface SpyroTextureStore {
     colors: Uint8Array[][];
-    headers: TextureHeader[];
+    headers: SpyroTextureHeader[];
 }
 
-interface TextureHeader {
-    mid: TileDefinition,
-    cor?: TileDefinition[]
-}
-
-class TileDefinition {
+export class SpyroTileDefinition {
     baseX: number;
     baseY: number;
     packedPageCoords: vec2;
@@ -44,13 +39,13 @@ class TileDefinition {
 const S3_SUBLEVEL_INVALID_COR_TILES: Map<number, number[]> = new Map([
     [122, [3, 4, 5, 6, 77, 78]],
     [124, [10, 15, 16, 67]],
-    [140, [60, 71, 78]],
+    [140, [36, 60, 71, 78]],
     [156, [0]],
     [170, [1, 21, 22, 65]]
 ]);
 
-export function parseSpyroTextures(vram: SpyroVRAM, textureHeaders: DataView, gameNumber: number, levelId: number = -1): SpyroTextureStore {
-    const headers = parseTextureHeaders(textureHeaders, gameNumber);
+export function buildSpyroTextures(vram: SpyroVRAM, textureHeaders: DataView, gameNumber: number, levelId: number = -1): SpyroTextureStore {
+    const headers = parseSpyroTextureHeaders(textureHeaders, gameNumber);
     const colors: Uint8Array[][] = Array(headers.length);
     for (let i = 0; i < headers.length; i++) {
         let doCOR = true;
@@ -74,6 +69,58 @@ export function parseSpyroTextures(vram: SpyroVRAM, textureHeaders: DataView, ga
         );
     }
     return { colors, headers };
+}
+
+export function buildSpyroTile(data: DataView, offset: number, gameNumber: number): SpyroTileDefinition {
+    const tile = new SpyroTileDefinition(data, offset);
+    if (gameNumber === 1) {
+        if ((tile.flags2 & 128) > 0) {
+            tile.size = 32;
+        } else {
+            tile.size = 16;
+        }
+    }
+    if ((tile.flags2 & 1) > 0) {
+        tile.bitDepth = 15;
+    } else if ((tile.flags1 & 128) > 0) {
+        tile.bitDepth = 8;
+    } else {
+        tile.bitDepth = 4;
+    }
+    tile.shift = tile.flags1 & 7;
+    switch (tile.bitDepth) {
+        case 4:
+            tile.shift *= 256;
+            break;
+        case 8:
+            tile.shift *= 128;
+            break;
+        case 15:
+            tile.shift *= 64;
+            break;
+    }
+    tile.x[3] = tile.baseX + tile.shift;
+    tile.x[2] = tile.xx + tile.shift;
+    tile.x[0] = tile.x[3];
+    tile.x[1] = tile.x[3] + tile.size;
+    tile.y[3] = tile.baseY;
+    if ((tile.flags1 & 16) > 0) {
+        tile.y[3] += 256;
+    }
+    tile.y[2] = tile.y[3];
+    tile.y[0] = tile.y[3] + tile.size;
+    tile.y[1] = tile.y[3] + tile.size;
+    tile.pageX = (tile.packedPageCoords[0] & 31) * 16;
+    tile.pageY = (tile.packedPageCoords[0] >> 6) | (tile.packedPageCoords[1] << 2);
+    tile.rotation = ((tile.flags2 & 127) >> 4) & 7;
+    if (gameNumber > 1) {
+        if ((tile.flags2 & 128) > 0) {
+            tile.transparent = 1 + ((tile.flags1 & 127) >> 5);
+        } else {
+            tile.transparent = 0;
+        }
+    }
+    return tile;
 }
 
 function turn(src: Uint8Array, size: number): Uint8Array {
@@ -121,7 +168,7 @@ function flip(src: Uint8Array, size: number): Uint8Array {
     return dest;
 }
 
-function applyTileRotationRGBA(rgba: Uint8Array, tile: TileDefinition, size: number, gameNumber: number): Uint8Array {
+function applyTileRotationRGBA(rgba: Uint8Array, tile: SpyroTileDefinition, size: number, gameNumber: number): Uint8Array {
     let rotatedRGBA = rgba;
 
     switch (tile.rotation) {
@@ -178,7 +225,7 @@ function getCLUT(vram: SpyroVRAM, px: number, py: number, n: number): [number, n
     return clut;
 }
 
-function decodeTileToRGBA(vram: SpyroVRAM, tile: TileDefinition, width: number = tile.size, height: number = tile.size): Uint8Array {
+function decodeTileToRGBA(vram: SpyroVRAM, tile: SpyroTileDefinition, width: number = tile.size, height: number = tile.size): Uint8Array {
     let startX = tile.x[3];
     const startY = tile.y[3];
     if (tile.bitDepth === 4) {
@@ -258,97 +305,4 @@ function combineCorners(topLeft: Uint8Array, topRight: Uint8Array, bottomLeft: U
         combined.push(...bottomRight.slice(start, end));
     }
     return new Uint8Array(combined);
-}
-
-function parseTextureHeaders(data: DataView, gameNumber: number): TextureHeader[] {
-    const count = data.getUint32(4, true);
-    const headers = new Array(count);
-    let offset = 8;
-    if (gameNumber === 1) {
-        // starts with lod-mid header pairs
-        for (let i = 0; i < count; i++) {
-            offset += 8; // skip lod header (it's always the same???)
-            const mid = parseTile(data, offset, gameNumber);
-            offset += 8;
-            headers[i] = { mid, cor: [] };
-        }
-        // jump to high-res groups
-        offset = 8 + (16 * count);
-        for (let i = 0; i < count; i++) {
-            offset += 8; // skip "spr" header
-            const cor: TileDefinition[] = Array(4);
-            for (let j = 0; j < 4; j++) {
-                cor[j] = parseTile(data, offset, gameNumber);
-                offset += 8;
-            }
-            offset += 8 * 16; // skip "sm" headers, same as cor?
-            headers[i].cor = cor;
-        }
-    } else {
-        // sequential headers of lod-mid-cor
-        for (let i = 0; i < count; i++) {
-            offset += 8; // skip lod
-            const mid = parseTile(data, offset, gameNumber);
-            offset += 8;
-            const cor: TileDefinition[] = Array(4);
-            for (let j = 0; j < 4; j++) {
-                cor[j] = parseTile(data, offset, gameNumber);
-                offset += 8;
-            }
-            headers[i] = { mid, cor };
-        }
-    }
-    return headers;
-}
-
-function parseTile(data: DataView, offset: number, gameNumber: number): TileDefinition {
-    const tile = new TileDefinition(data, offset);
-    if (gameNumber === 1) {
-        if ((tile.flags2 & 128) > 0) {
-            tile.size = 32;
-        } else {
-            tile.size = 16;
-        }
-    }
-    if ((tile.flags2 & 1) > 0) {
-        tile.bitDepth = 15;
-    } else if ((tile.flags1 & 128) > 0) {
-        tile.bitDepth = 8;
-    } else {
-        tile.bitDepth = 4;
-    }
-    tile.shift = tile.flags1 & 7;
-    switch (tile.bitDepth) {
-        case 4:
-            tile.shift *= 256;
-            break;
-        case 8:
-            tile.shift *= 128;
-            break;
-        case 15:
-            tile.shift *= 64;
-            break;
-    }
-    tile.x[3] = tile.baseX + tile.shift;
-    tile.x[2] = tile.xx + tile.shift;
-    tile.x[0] = tile.x[3];
-    tile.x[1] = tile.x[3] + tile.size;
-    tile.y[3] = tile.baseY;
-    if ((tile.flags1 & 16) > 0) {
-        tile.y[3] += 256;
-    }
-    tile.y[2] = tile.y[3];
-    tile.y[0] = tile.y[3] + tile.size;
-    tile.y[1] = tile.y[3] + tile.size;
-    tile.pageX = (tile.packedPageCoords[0] & 31) * 16;
-    tile.pageY = (tile.packedPageCoords[0] >> 6) | (tile.packedPageCoords[1] << 2);
-    tile.rotation = ((tile.flags2 & 127) >> 4) & 7;
-    if (gameNumber > 1) {
-        if ((tile.flags2 & 128) > 0) {
-            tile.transparent = 1 + ((tile.flags1 & 127) >> 5);
-        } else {
-            tile.transparent = 0;
-        }
-    }
-    return tile;
 }

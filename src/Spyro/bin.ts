@@ -1,7 +1,7 @@
 import { vec2, vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert } from "../util";
-import { SpyroTextureStore } from "./texture";
+import { buildSpyroTile, SpyroTextureStore, SpyroTileDefinition } from "./texture";
 
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for a majority of the data structures, reverse-engineering and parsing logic
 
@@ -46,7 +46,12 @@ export interface SpyroLevelData {
     grounds?: ArrayBufferSlice[];
     sky: ArrayBufferSlice;
     skies?: ArrayBufferSlice[];
-    subfile4?: ArrayBufferSlice;
+    mobyInstances: ArrayBufferSlice;
+}
+
+export interface SpyroTextureHeader {
+    mid: SpyroTileDefinition,
+    cor?: SpyroTileDefinition[]
 }
 
 export interface SpyroSkybox {
@@ -136,7 +141,7 @@ class Polygon {
 
 // 512 KB and some change
 const VRAM_SIZE = 524288;
-const MOBY_INSTANCE_SIZE = 88;
+const EMPTY_ARRAYBUFFERSLICE = new ArrayBufferSlice(new Uint8Array().buffer);
 
 export class SpyroVRAM {
     private data: Uint16Array;
@@ -163,6 +168,71 @@ export class SpyroVRAM {
         for (let x = 512; x <= 575; x++) {
             this.data[130560 + x] = this.data[130048 + x - 512];
         }
+    }
+}
+
+class Parser {
+    public offset: number = 0;
+    private data: DataView;
+
+    constructor(public buffer: ArrayBufferSlice) {
+        this.data = buffer.createDataView();
+    }
+
+    public getSubfile(i: number): ArrayBufferSlice {
+        const ret = this.offset;
+        this.offset = i * 8;
+        const sf_off = this.getUint32();
+        const sf_size = this.getUint32();
+        let subfile;
+        if (sf_off === 0 || sf_size === 0) {
+            subfile = EMPTY_ARRAYBUFFERSLICE;
+        } else {
+            subfile = this.buffer.subarray(sf_off, sf_size);
+        }
+        this.offset = ret;
+        return subfile;
+    }
+
+    public readSection(): ArrayBufferSlice {
+        const size = this.getUint32();
+        if (size === 4) {
+            return EMPTY_ARRAYBUFFERSLICE;
+        }
+        const section = this.buffer.subarray(this.offset, size - 4);
+        this.offset += size - 4;
+        return section;
+    }
+
+    public skipSection() {
+        const size = this.getUint32();
+        this.offset += size - 4;
+    }
+
+    public skip(n: number) {
+        this.offset += n;
+    }
+
+    public getInt8(): number {
+        const n = this.data.getInt8(this.offset);
+        this.offset += 1;
+        return n;
+    }
+
+    public getUint8(): number {
+        const n = this.data.getUint8(this.offset);
+        this.offset += 1;
+        return n;
+    }
+
+    public getUint32(): number {
+        const n = this.data.getUint32(this.offset, true);
+        this.offset += 4;
+        return n;
+    }
+
+    public getUint32At(offset: number): number {
+        return this.data.getUint32(offset, true);
     }
 }
 
@@ -228,16 +298,13 @@ export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, g
     let partCount = ground.getUint32(0, true);
     let offset = 4;
     const partOffsets: number[] = [];
-
     if (gameNumber > 1) {
-        offset = 0;
-        let table = ground.getUint32(offset, true);
-        offset += 4;
-        partCount = ground.getUint32(table, true);
-        table += 4;
+        const skip = ground.getUint32(0, true);
+        partCount = ground.getUint32(skip, true);
+        offset = skip + 4;
         for (let i = 0; i < partCount; i++) {
-            partOffsets.push(ground.getUint32(table, true));
-            table += 4;
+            partOffsets.push(ground.getUint32(offset, true));
+            offset += 4;
         }
     }
 
@@ -354,10 +421,11 @@ export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, g
         if (gameNumber === 1) {
             const o = ground.getUint32(offset, true);
             offset += 4;
-            pointer = o + 8;
+            pointer = o;
         } else {
-            pointer = partOffsets[partIndex] + 8;
+            pointer = partOffsets[partIndex];
         }
+        pointer += 8;
 
         const header = new PartHeader(ground, pointer);
         pointer += 20;
@@ -484,285 +552,216 @@ export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, g
     };
 }
 
-export function parseSpyroMobyInstances(subfile4: DataView, gameNumber: number): SpyroMobyInstance[] {
-    const size = subfile4.byteLength;
-    const sectionIndex = [7, 8, 12][gameNumber - 1];
-    let pointer = [136, 44, 48][gameNumber - 1];
-    let index = 0;
-    // jump sections until reaching the right one
-    while (pointer < size - 8 && index < sectionIndex) {
-        const sectionSize = subfile4.getUint32(pointer, true);
-        pointer += sectionSize;
-        index += 1;
+export function parseSpyroTextureHeaders(data: DataView, gameNumber: number): SpyroTextureHeader[] {
+    const count = data.getUint32(0, true);
+    const headers = new Array(count);
+    let offset = 4;
+    if (gameNumber === 1) {
+        // starts with lod-mid header pairs
+        for (let i = 0; i < count; i++) {
+            offset += 8; // skip lod header
+            const mid = buildSpyroTile(data, offset, gameNumber);
+            offset += 8;
+            headers[i] = { mid, cor: [] };
+        }
+        // jump to high-res groups
+        offset = 4 + (16 * count);
+        for (let i = 0; i < count; i++) {
+            offset += 8; // skip spr header
+            const cor: SpyroTileDefinition[] = Array(4);
+            for (let j = 0; j < 4; j++) {
+                cor[j] = buildSpyroTile(data, offset, gameNumber);
+                offset += 8;
+            }
+            offset += 8 * 16; // skip sm headers
+            headers[i].cor = cor;
+        }
+    } else {
+        // sequential headers of lod-mid-cor
+        for (let i = 0; i < count; i++) {
+            offset += 8; // skip lod
+            const mid = buildSpyroTile(data, offset, gameNumber);
+            offset += 8;
+            const cor: SpyroTileDefinition[] = Array(4);
+            for (let j = 0; j < 4; j++) {
+                cor[j] = buildSpyroTile(data, offset, gameNumber);
+                offset += 8;
+            }
+            headers[i] = { mid, cor };
+        }
     }
-    pointer += 4; // skip the instances section's size/next pointer
+    return headers;
+}
 
-    if (pointer + MOBY_INSTANCE_SIZE > size) {
-        // section is empty, therefore no mobys
+export function parseSpyroMobyInstances(data: ArrayBufferSlice): SpyroMobyInstance[] {
+    if (data.byteLength < 92) {
         return [];
     }
 
-    // moby instances (88)
-    const mobys: SpyroMobyInstance[] = [];
-    for (let i = 0; i < subfile4.getUint32(pointer, true); i++) {
-        const pos = pointer + 4 + (i * MOBY_INSTANCE_SIZE);
-        if (pos + MOBY_INSTANCE_SIZE > size) {
-            break;
-        }
-        // offset: name (size)
-        //      0: mystery incrementing value (4)
-        //   4-11: ???
-        //     12: x (4)
-        //     16: y (4)
-        //     20: z (4)
-        //  24-30: ???
-        //     31: mystery 0 or 128 value (1)
-        //  32-53: ???
-        //     54: class ID (1)
-        //  55-69: ???
-        //     70: yaw (1)
-        //  71-88: ???
-        const x = subfile4.getInt32(pos + 12, true);
-        const y = subfile4.getInt32(pos + 16, true);
-        const z = subfile4.getInt32(pos + 20, true);
-        const yaw = subfile4.getInt8(pos + 70);
-        const classId = subfile4.getUint8(pos + 54);
-        // unlikely to have a moby at origin and there's lots of "empty" ones
+    const section = new Parser(data);
+    const count = section.getUint32();
+    const instances: SpyroMobyInstance[] = Array(count);
+    for (let i = 0; i < count; i++) {
+        section.skip(12);
+        const x = section.getUint32();
+        const y = section.getUint32();
+        const z = section.getUint32();
+        section.skip(30);
+        const classId = section.getUint8();
+        section.skip(15);
+        const yaw = section.getInt8();
+        section.skip(17);
         if (x === 0 && y === 0 && z === 0) {
-            continue;
+            console.warn("Moby instance at origin, offset", section.offset - 88);
         }
-        mobys.push({ x, y, z, yaw, classId });
+        instances[i] = { x, y, z, yaw, classId };
     }
 
-    return mobys;
+    return instances;
 }
 
-export function parseSpyroLevelData(data: ArrayBufferSlice, isStandardLevel: boolean): SpyroLevelData {
-    let pointer = 0;
-    function getUint32() {
-        return new Uint32Array(data.arrayBuffer, pointer, 4)[0];
+export function parseSpyroLevelData(data: ArrayBufferSlice, isStandard: boolean): SpyroLevelData {
+    const file = new Parser(data);
+
+    let vram;
+    if (!isStandard && file.getUint32At(4) === 0) {
+        // flyover levels will have smaller vram and no sound data
+        // but the subfile 1 size is set to 0 for some reason, go until subfile 2 offset instead
+        vram = data.subarray(file.getUint32At(0), file.getUint32At(8) - file.getUint32At(0));
+    } else {
+        const subfile1 = file.getSubfile(0);
+        vram = subfile1.subarray(0, Math.min(VRAM_SIZE, subfile1.byteLength));
+        // remainder of subfile 1 is sound data (if present)
     }
 
-    // vram (subfile 1 also includes sound data after the vram but that's ignored)
-    const subFile1Offset = getUint32();
-    const vram = data.subarray(subFile1Offset, VRAM_SIZE < data.byteLength ? VRAM_SIZE : 512000); // temp fix for tiny flyover levels
-
-    // texture list
-    pointer = 8;
-    const subFile2Offset = getUint32();
-    pointer = subFile2Offset;
-    const textureListSize = getUint32();
-    const textureList = data.subarray(pointer, textureListSize + 16);
-
-    // ground
-    pointer = subFile2Offset;
-    pointer += textureListSize;
-    const groundSize = getUint32() - 4;
-    pointer += 4;
-    const ground = data.subarray(pointer, groundSize);
-
-    // sky
-    pointer += groundSize;
-    if (isStandardLevel) {
-        // skip unknown parts section and two other unknown sections
-        for (let i = 0; i < 3; i++) {
-            const sectionSize = getUint32();
-            pointer += sectionSize;
-        }
+    const subfile2 = new Parser(file.getSubfile(1));
+    const textureHeaders = subfile2.readSection();
+    const ground = subfile2.readSection();
+    if (isStandard) {
+        subfile2.skipSection(); // unknown, has two sub-sections with lists of relative offsets
+        subfile2.skipSection(); // unknown, can make portals in homeworlds non-enterable
+        subfile2.skipSection(); // collision data
     }
-    const skySize = getUint32();
-    pointer += 4;
-    const sky = data.subarray(pointer, skySize);
-
-    let subfile4;
-    pointer = 24;
-    const subfile4Offset = getUint32();
-    pointer += 4;
-    let subfile4Size = getUint32();
-    pointer = subfile4Offset;
-    if (pointer + subfile4Size < data.byteLength) {
-        subfile4 = data.subarray(pointer, subfile4Size);
+    const sky = subfile2.readSection();
+    if (isStandard) {
+        // count of portal skyboxes
+        // if > 0, homeworlds will have their portal skyboxes here
+        // particle effect section
+        // sound effect section
     }
 
-    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureHeaders: textureList, ground, sky, subfile4 };
+    // subfile 3 is entirely moby animations (and the models themselves maybe?)
+    // offsets to these are located at 0x50 and there's up to 64 of them
+
+    const subfile4 = new Parser(file.getSubfile(3));
+    let mobyInstances;
+    if (isStandard) {
+        subfile4.skip(136); // some sort of header
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection(); // possible moby sound data?
+        subfile4.skipSection(); // possible moby sound data?
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        mobyInstances = subfile4.readSection();
+        // padding of 10240
+        // three more unknown sections
+        // another unknown section with pointers that can mess up portal text and make dragons non-replayable
+    } else {
+        mobyInstances = EMPTY_ARRAYBUFFERSLICE;
+    }
+
+    // any subfiles beyond 4 are related to dragon statues, majority of data is their voice lines
+
+    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureHeaders, ground, sky, mobyInstances };
 }
 
 export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number, isFlyover: boolean = false): SpyroLevelData {
-    let pointer = 0;
-    function getUint32() {
-        pointer += 4;
-        return new Uint32Array(data.arrayBuffer, pointer - 4, 4)[0];
-    }
+    const file = new Parser(data);
 
-    // vram (subfile 1 also includes sound data after the vram but that's ignored)
-    pointer += getUint32();
-    let vramSize = VRAM_SIZE;
-    const remainingVram = data.byteLength - pointer;
-    if (remainingVram < vramSize) {
-        vramSize = remainingVram;
-    }
-    const vram = data.subarray(pointer, vramSize);
+    const subfile1 = file.getSubfile(0);
+    const vram = subfile1.subarray(0, Math.min(VRAM_SIZE, subfile1.byteLength));
+    // remainder of subfile 1 is sound data (if present)
 
-    // texture list
-    pointer = 8;
-    const subfile2Offset = getUint32();
-    pointer = subfile2Offset;
-    const listSize = getUint32();
-    pointer -= 4;
-    const textureList = data.subarray(pointer, listSize + 16);
-
-    // sky
-    pointer = subfile2Offset;
-    let offset = getUint32();
-    pointer += offset - 4;
-    offset = getUint32();
-    pointer += offset - 4;
-    offset = getUint32();
-    pointer += offset - 4;
-    offset = getUint32();
-    pointer += offset - 4;
-    const skyStart = pointer;
+    const subfile2 = new Parser(file.getSubfile(1));
+    const textureHeaders = subfile2.readSection();
+    const ground = subfile2.readSection();
+    subfile2.skipSection();
+    subfile2.skipSection();
     if (!isFlyover) {
-        const p = new Uint8Array(data.arrayBuffer, pointer, 12);
-        pointer += 12;
-
-        const isValidPattern =
-            ((p[0] & 15) === 0) &&
-            ((p[1] >> 4) === 0) &&
-            (p[2] === 0) &&
-            (p[3] === 0) &&
-            ((p[4] & 15) === 0) &&
-            ((p[5] >> 4) === 0) &&
-            (p[6] === 0) &&
-            (p[7] === 0) &&
-            ((p[8] & 15) === 0) &&
-            ((p[9] >> 4) === 0) &&
-            (p[10] === 0) &&
-            (p[11] === 0);
-
-        if (!isValidPattern) {
-            pointer = skyStart;
-            offset = getUint32();
-            pointer += offset - 4;
-            offset = getUint32();
-            if (offset === 0) {
-                pointer = skyStart + 4;
-            } else {
-                pointer += offset - 4;
-                offset = getUint32();
-                if (offset === 0) {
-                    pointer = skyStart + 4;
-                } else {
-                    pointer += 8;
-                }
-            }
+        if (gameNumber === 2) {
+            subfile2.skipSection();
+            subfile2.skipSection();
         }
-        offset = getUint32();
-        pointer += offset - 4;
+        subfile2.skip(12);
+        subfile2.skipSection(); // collision data
     }
-    offset = getUint32();
-    const sky = data.subarray(pointer, offset - 4);
-
-    // sublevels' sky
-    const skys: ArrayBufferSlice[] = [];
-    if (gameNumber === 3) {
-        pointer = 0x28;
-        const subfile6Offset = getUint32();
-        pointer += 12;
-        const subfile8Offset = getUint32();
-        pointer += 12;
-        const subfile10Offset = getUint32();
-
-        for (const p of [subfile6Offset, subfile8Offset, subfile10Offset]) {
-            if (p !== 0) {
-                pointer = p + 48;
-                const size = getUint32();
-                // section is "empty" if the size is 4 (it's just the size itself as the entire section)
-                if (size > 4) {
-                    skys.push(data.subarray(pointer, size - 4));
-                }
-            }
-        }
+    const sky = subfile2.readSection();
+    if (!isFlyover) {
+        // unknown section
+        // particle effect section
+        // unknown section
+        // sound effect section
     }
 
-    // ground
-    pointer = subfile2Offset;
-    offset = getUint32();
-    pointer += offset - 4;
-    offset = getUint32();
-    const ground = data.subarray(pointer, offset - 4);
-    pointer += offset - 4;
-
-    // sublevels' ground
+    // sublevels' first subfile (up to 3)
     const grounds: ArrayBufferSlice[] = [];
     if (gameNumber === 3) {
-        let i = 1;
-        while (true) {
-            i += 1;
-            pointer = 16 * i;
-            offset = getUint32();
-            const size3 = getUint32();
-            const start = offset;
-            if (start + size3 > data.byteLength) {
-                break;
+        for (const i of [4, 6, 8]) {
+            const sf = file.getSubfile(i);
+            if (sf.byteLength > 0) {
+                const subfile = new Parser(sf);
+                subfile.skipSection();
+                subfile.skip(384);
+                grounds.push(subfile.readSection());
+                // 3 unknown sections, then collision data
             }
-            pointer = start;
-            offset = getUint32();
-            if ((pointer - start + offset - 8) > size3 || offset < 4) {
-                break;
-            }
-            pointer += offset - 4;
-            while (true) {
-                offset = getUint32();
-                if (offset !== 0) {
-                    break
-                }
-            }
-            while (true) {
-                offset = getUint32();
-                if (offset === 0) {
-                    break
-                }
-            }
-            while (true) {
-                offset = getUint32();
-                if (offset !== 0) {
-                    break
-                }
-            }
-            while (true) {
-                offset = getUint32();
-                if (offset === 0) {
-                    break
-                }
-            }
-            while (true) {
-                offset = getUint32();
-                if (offset !== 0) {
-                    break
-                }
-            }
-            if ((pointer - start + offset - 8) > size3 || offset < 4) {
-                break;
-            }
-            grounds.push(data.subarray(pointer, offset - 4));
         }
     }
 
-    // fourth subfile
-    let subfile4;
-    pointer = 24;
-    const subfile4Offset = getUint32();
-    let subfile4Size = getUint32();
-    if (gameNumber === 2) {
-        subfile4Size -= 32;
-    }
-    pointer += subfile4Offset - 32;
-    if (pointer + subfile4Size <= data.byteLength) {
-        subfile4 = data.subarray(pointer, subfile4Size);
+    // sublevels' second subfile (up to 3)
+    const skies: ArrayBufferSlice[] = [];
+    if (gameNumber === 3) {
+        for (const i of [5, 7, 9]) {
+            const sf = file.getSubfile(i);
+            if (sf.byteLength > 0) {
+                const subfile = new Parser(sf);
+                subfile.skip(48);
+                const skySection = subfile.readSection();
+                if (skySection.byteLength > 0) {
+                    skies.push(skySection);
+                }
+                // 11 more unknown sections, then moby instances
+            }
+        }
     }
 
-    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureHeaders: textureList, ground, grounds, sky, skies: skys, subfile4 };
+    const subfile4 = new Parser(file.getSubfile(3));
+    let mobyInstances;
+    if (!isFlyover) {
+        subfile4.skip(gameNumber === 2 ? 44 : 48); // some sort of header
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        subfile4.skipSection();
+        if (gameNumber === 3) {
+            subfile4.skipSection();
+            subfile4.skipSection();
+            subfile4.skipSection();
+            subfile4.skipSection();
+        }
+        mobyInstances = subfile4.readSection();
+        // a bunch of padding then the dialogue section
+    } else {
+        mobyInstances = EMPTY_ARRAYBUFFERSLICE;
+    }
+
+    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureHeaders, ground, grounds, sky, skies, mobyInstances };
 }
 
 function parseSkyboxPart(data: DataView, partOffset: number, vertices: number[][], colors: number[][], faces: SkyFace[]): void {
@@ -840,11 +839,11 @@ function parseSkyboxPart2(data: DataView, partOffset: number, vertices: number[]
         return;
     }
     pointer += 8;
-    const globalX = data.getInt16(pointer + 6, true);
     const globalY = data.getInt16(pointer, true);
     const globalZ = data.getInt16(pointer + 2, true);
     const vertexCount = data.getUint8(pointer + 4);
     const colorCount = data.getUint8(pointer + 5);
+    const globalX = data.getInt16(pointer + 6, true);
     const polyCount = data.getUint16(pointer + 10, true);
     pointer += 12;
 
