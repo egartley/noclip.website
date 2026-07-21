@@ -155,11 +155,11 @@ class S1Level implements SceneDesc {
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
         const levelFile = await context.dataFetcher.fetchData(`${pathBase}/sf${this.subfileID}.bin`);
-        const { vram, textureHeaders, ground, sky, mobyInstances } = parseSpyroLevelData(levelFile, this.subfileID >= 11 && this.subfileID <= 79);
-        const mobys = parseSpyroMobyInstances(mobyInstances);
-        const textures = buildSpyroTextures(vram, textureHeaders.createDataView(), this.gameNumber);
-        const level = buildSpyroLevel(ground.createDataView(), textures, this.gameNumber, this.subfileID);
-        const skybox = buildSpyroSkybox(sky.createDataView(), this.gameNumber);
+        const levelData = parseSpyroLevelData(levelFile, this.subfileID >= 11 && this.subfileID <= 79);
+        const mobys = parseSpyroMobyInstances(levelData.mobyInstances);
+        const textures = buildSpyroTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber);
+        const level = buildSpyroLevel(levelData.ground.createDataView(), textures, this.gameNumber, this.subfileID);
+        const skybox = buildSpyroSkybox(levelData.sky.createDataView(), this.gameNumber);
         return new Renderer(device, level, skybox, mobys);
     }
 }
@@ -176,12 +176,12 @@ class S2Level implements SceneDesc {
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
         const levelFile = await context.dataFetcher.fetchData(`${pathBase2}/sf${this.subfileID}.bin`);
-        const { vram, textureHeaders, ground, sky, mobyInstances } = parseSpyroLevelData2(levelFile, this.gameNumber, this.subfileID >= 188);
-        vram.applyFontStripFix();
-        const mobys = parseSpyroMobyInstances(mobyInstances);
-        const textures = buildSpyroTextures(vram, textureHeaders.createDataView(), this.gameNumber);
-        const level = buildSpyroLevel(ground.createDataView(), textures, this.gameNumber, this.subfileID);
-        const skybox = buildSpyroSkybox(sky.createDataView(), this.gameNumber);
+        const levelData = parseSpyroLevelData2(levelFile, this.gameNumber, 0, this.subfileID >= 188);
+        levelData.vram.applyFontStripFix();
+        const mobys = parseSpyroMobyInstances(levelData.mobyInstances);
+        const textures = buildSpyroTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber);
+        const level = buildSpyroLevel(levelData.ground.createDataView(), textures, this.gameNumber, this.subfileID);
+        const skybox = buildSpyroSkybox(levelData.sky.createDataView(), this.gameNumber);
         return new Renderer(device, level, skybox, mobys);
     }
 }
@@ -191,9 +191,9 @@ class S3Level implements SceneDesc {
     public id: string;
     private gameNumber: number;
 
-    constructor(public subfileID: number, public name: string, private sublevelID?: number) {
+    constructor(public subfileID: number, public name: string, private sublevelID = 0) {
         this.id = subfileID.toString();
-        if (this.sublevelID !== undefined) {
+        if (this.sublevelID > 0) {
             this.id = `${subfileID}_${sublevelID}`;
         }
         this.gameNumber = 3;
@@ -201,19 +201,11 @@ class S3Level implements SceneDesc {
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
         const levelFile = await context.dataFetcher.fetchData(`${pathBase3}/sf${this.subfileID}.bin`);
-        const { vram, textureHeaders, ground: g, grounds, sky: s, skies, mobyInstances } = parseSpyroLevelData2(levelFile, this.gameNumber, this.subfileID >= 184);
-        const mobys = (this.sublevelID === undefined) ? parseSpyroMobyInstances(mobyInstances) : [];
-        let ground = g;
-        if (this.sublevelID && grounds && grounds.length > 0) {
-            ground = grounds[this.sublevelID - 1];
-        }
-        let sky = s;
-        if (this.sublevelID && skies && skies.length > 0) {
-            sky = skies[this.sublevelID - 1];
-        }
-        const textures = buildSpyroTextures(vram, textureHeaders.createDataView(), this.gameNumber, this.subfileID);
-        const level = buildSpyroLevel(ground.createDataView(), textures, this.gameNumber, this.subfileID);
-        const skybox = buildSpyroSkybox(sky.createDataView(), this.gameNumber);
+        const levelData = parseSpyroLevelData2(levelFile, this.gameNumber, this.sublevelID, this.subfileID >= 184);
+        const mobys = parseSpyroMobyInstances(levelData.mobyInstances);
+        const textures = buildSpyroTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber, this.subfileID);
+        const level = buildSpyroLevel(levelData.ground.createDataView(), textures, this.gameNumber, this.subfileID);
+        const skybox = buildSpyroSkybox(levelData.sky.createDataView(), this.gameNumber);
         return new Renderer(device, level, skybox, mobys);
     }
 }

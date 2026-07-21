@@ -1,9 +1,10 @@
-import { vec2, vec3, vec4 } from "gl-matrix";
+import { vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert } from "../util";
 import { buildSpyroTile, SpyroTextureStore, SpyroTileDefinition } from "./texture";
 
-// Credit to "Spyro World Viewer" by Kly_Men_COmpany for a majority of the data structures, reverse-engineering and parsing logic
+// Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
+// Further enhancements, additions and fixes are wholly original
 
 interface SkyFace {
     indices: number[];
@@ -41,11 +42,9 @@ export interface SpyroLevel {
 
 export interface SpyroLevelData {
     vram: SpyroVRAM;
-    textureHeaders: ArrayBufferSlice;
+    textureTable: ArrayBufferSlice;
     ground: ArrayBufferSlice;
-    grounds?: ArrayBufferSlice[];
     sky: ArrayBufferSlice;
-    skies?: ArrayBufferSlice[];
     mobyInstances: ArrayBufferSlice;
 }
 
@@ -139,7 +138,6 @@ class Polygon {
     }
 }
 
-// 512 KB and some change
 const VRAM_SIZE = 524288;
 const EMPTY_ARRAYBUFFERSLICE = new ArrayBufferSlice(new Uint8Array().buffer);
 
@@ -196,16 +194,25 @@ class Parser {
 
     public readSection(): ArrayBufferSlice {
         const size = this.getUint32();
-        if (size === 4) {
+        if (size <= 8 && size >= 4) {
+            // "empty" sections will be just the size itself or size + 4 padding bytes
+            this.offset += size - 4;
+            return EMPTY_ARRAYBUFFERSLICE;
+        } else if (size > 8) {
+            const section = this.buffer.subarray(this.offset, size - 4);
+            this.offset += size - 4;
+            return section;
+        } else {
+            console.warn("Section size too small. Hexpat is wrong!", `${size} at 0x${this.offset - 4}`);
             return EMPTY_ARRAYBUFFERSLICE;
         }
-        const section = this.buffer.subarray(this.offset, size - 4);
-        this.offset += size - 4;
-        return section;
     }
 
     public skipSection() {
         const size = this.getUint32();
+        if (size < 4) {
+            console.warn("Section size too small. Further problems may occur...", `${size} at 0x${this.offset - 4}`);
+        }
         this.offset += size - 4;
     }
 
@@ -552,7 +559,7 @@ export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, g
     };
 }
 
-export function parseSpyroTextureHeaders(data: DataView, gameNumber: number): SpyroTextureHeader[] {
+export function parseSpyroTextureTable(data: DataView, gameNumber: number): SpyroTextureHeader[] {
     const count = data.getUint32(0, true);
     const headers = new Array(count);
     let offset = 4;
@@ -626,7 +633,7 @@ export function parseSpyroLevelData(data: ArrayBufferSlice, isStandard: boolean)
     let vram;
     if (!isStandard && file.getUint32At(4) === 0) {
         // flyover levels will have smaller vram and no sound data
-        // but the subfile 1 size is set to 0 for some reason, go until subfile 2 offset instead
+        // but the subfile 1 size is set to 0 sometimes for some reason (???), use the subfile 2 offset to determine size
         vram = data.subarray(file.getUint32At(0), file.getUint32At(8) - file.getUint32At(0));
     } else {
         const subfile1 = file.getSubfile(0);
@@ -674,19 +681,28 @@ export function parseSpyroLevelData(data: ArrayBufferSlice, isStandard: boolean)
 
     // any subfiles beyond 4 are related to dragon statues, majority of data is their voice lines
 
-    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureHeaders, ground, sky, mobyInstances };
+    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureTable: textureHeaders, ground, sky, mobyInstances };
 }
 
-export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number, isFlyover: boolean = false): SpyroLevelData {
+export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number, levelNumber: number, isFlyover: boolean = false): SpyroLevelData {
     const file = new Parser(data);
 
     const subfile1 = file.getSubfile(0);
     const vram = subfile1.subarray(0, Math.min(VRAM_SIZE, subfile1.byteLength));
     // remainder of subfile 1 is sound data (if present)
 
+    let ground = EMPTY_ARRAYBUFFERSLICE;
+    let sky = EMPTY_ARRAYBUFFERSLICE;
+    let mobyInstances = EMPTY_ARRAYBUFFERSLICE;
+
     const subfile2 = new Parser(file.getSubfile(1));
     const textureHeaders = subfile2.readSection();
-    const ground = subfile2.readSection();
+    if (levelNumber === 0) {
+        ground = subfile2.readSection();
+    } else {
+        // sublevel is specified, don't bother reading parent ground
+        subfile2.skipSection();
+    }
     subfile2.skipSection();
     subfile2.skipSection();
     if (!isFlyover) {
@@ -697,71 +713,79 @@ export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number,
         subfile2.skip(12);
         subfile2.skipSection(); // collision data
     }
-    const sky = subfile2.readSection();
-    if (!isFlyover) {
-        // unknown section
-        // particle effect section
-        // unknown section
-        // sound effect section
-    }
+    sky = subfile2.readSection();
+    // some other stuff like particle and sound effects, egg names in s3
 
     // sublevels' first subfile (up to 3)
-    const grounds: ArrayBufferSlice[] = [];
-    if (gameNumber === 3) {
-        for (const i of [4, 6, 8]) {
-            const sf = file.getSubfile(i);
-            if (sf.byteLength > 0) {
-                const subfile = new Parser(sf);
-                subfile.skipSection();
-                subfile.skip(384);
-                grounds.push(subfile.readSection());
-                // 3 unknown sections, then collision data
-            }
+    if (gameNumber === 3 && levelNumber > 0) {
+        const i = [4, 6, 8][levelNumber - 1];
+        const sf = file.getSubfile(i);
+        if (sf.byteLength > 0) {
+            const subfile = new Parser(sf);
+            subfile.skipSection();
+            subfile.skip(384);
+            ground = subfile.readSection();
+            // 3 unknown sections, then collision data
+        } else {
+            console.warn("Could not find first subfile for sublevel", levelNumber);
         }
     }
 
     // sublevels' second subfile (up to 3)
-    const skies: ArrayBufferSlice[] = [];
-    if (gameNumber === 3) {
-        for (const i of [5, 7, 9]) {
-            const sf = file.getSubfile(i);
-            if (sf.byteLength > 0) {
-                const subfile = new Parser(sf);
-                subfile.skip(48);
-                const skySection = subfile.readSection();
-                if (skySection.byteLength > 0) {
-                    skies.push(skySection);
-                }
-                // 11 more unknown sections, then moby instances
+    if (gameNumber === 3 && levelNumber > 0) {
+        const i = [5, 7, 9][levelNumber - 1];
+        const sf = file.getSubfile(i);
+        if (sf.byteLength > 0) {
+            const subfile = new Parser(sf);
+            subfile.skip(48);
+            const skySection = subfile.readSection();
+            if (skySection.byteLength > 8) {
+                sky = skySection;
+            } else {
+                // most sublevels use will their parent's skybox
             }
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection(); // help text
+            subfile.skipSection();
+            subfile.skipSection();
+            subfile.skipSection();
+            mobyInstances = subfile.readSection();
         }
     }
 
-    const subfile4 = new Parser(file.getSubfile(3));
-    let mobyInstances;
-    if (!isFlyover) {
-        subfile4.skip(gameNumber === 2 ? 44 : 48); // some sort of header
-        subfile4.skipSection();
-        subfile4.skipSection();
-        subfile4.skipSection();
-        subfile4.skipSection();
-        subfile4.skipSection();
-        subfile4.skipSection();
-        subfile4.skipSection();
-        subfile4.skipSection();
-        if (gameNumber === 3) {
+    // always read for s2 and only for s3 if not a sublevel
+    if (gameNumber === 2 || (gameNumber === 3 && levelNumber === 0)) {
+        const subfile4 = new Parser(file.getSubfile(3));
+        if (!isFlyover) {
+            subfile4.skip(gameNumber === 2 ? 44 : 48); // some sort of header
             subfile4.skipSection();
             subfile4.skipSection();
             subfile4.skipSection();
             subfile4.skipSection();
+            subfile4.skipSection();
+            subfile4.skipSection();
+            subfile4.skipSection();
+            subfile4.skipSection();
+            if (gameNumber === 3) {
+                subfile4.skipSection(); // help text
+                subfile4.skipSection();
+                subfile4.skipSection();
+                subfile4.skipSection();
+            }
+            mobyInstances = subfile4.readSection();
+            // a bunch of padding then the dialogue section
+        } else {
+            mobyInstances = EMPTY_ARRAYBUFFERSLICE;
         }
-        mobyInstances = subfile4.readSection();
-        // a bunch of padding then the dialogue section
-    } else {
-        mobyInstances = EMPTY_ARRAYBUFFERSLICE;
     }
 
-    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureHeaders, ground, grounds, sky, skies, mobyInstances };
+    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureTable: textureHeaders, ground, sky, mobyInstances };
 }
 
 function parseSkyboxPart(data: DataView, partOffset: number, vertices: number[][], colors: number[][], faces: SkyFace[]): void {

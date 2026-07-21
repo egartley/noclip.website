@@ -1,5 +1,5 @@
 import { vec2, vec4 } from "gl-matrix";
-import { parseSpyroTextureHeaders, SpyroTextureHeader, SpyroVRAM } from "./bin";
+import { parseSpyroTextureTable, SpyroTextureHeader, SpyroVRAM } from "./bin";
 
 export interface SpyroTextureStore {
     colors: Uint8Array[][];
@@ -44,8 +44,8 @@ const S3_SUBLEVEL_INVALID_COR_TILES: Map<number, number[]> = new Map([
     [170, [1, 21, 22, 65]]
 ]);
 
-export function buildSpyroTextures(vram: SpyroVRAM, textureHeaders: DataView, gameNumber: number, levelId: number = -1): SpyroTextureStore {
-    const headers = parseSpyroTextureHeaders(textureHeaders, gameNumber);
+export function buildSpyroTextures(vram: SpyroVRAM, textureTable: DataView, gameNumber: number, levelId: number = -1): SpyroTextureStore {
+    const headers = parseSpyroTextureTable(textureTable, gameNumber);
     const colors: Uint8Array[][] = Array(headers.length);
     for (let i = 0; i < headers.length; i++) {
         let doCOR = true;
