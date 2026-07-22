@@ -6,11 +6,6 @@ import { buildSpyroTile, SpyroTextureStore, SpyroTileDefinition } from "./textur
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
 // Further enhancements, additions and fixes are wholly original
 
-interface SkyFace {
-    indices: number[];
-    colors: number[];
-}
-
 interface LevelStream {
     vertices: number[];
     colors: number[];
@@ -55,9 +50,18 @@ export interface SpyroTextureHeader {
 
 export interface SpyroSkybox {
     backgroundColor: number[];
-    vertices: number[][];
-    colors: number[][];
-    faces: SkyFace[];
+    parts: SkyboxPart[];
+}
+
+interface SkyboxPart {
+    vlut: number[][];
+    clut: number[][];
+    polygons: SkyPolygon[];
+}
+
+interface SkyPolygon {
+    vertices: Uint32Array;
+    colors: Uint32Array;
 }
 
 export interface SpyroMobyInstance {
@@ -116,7 +120,7 @@ class LODPoly2 {
     }
 }
 
-class Polygon {
+class GroundPolygon {
     vertexIndices: vec4;
     colorIndices: vec4;
     packedTileIndex: number = 0;
@@ -144,8 +148,8 @@ const EMPTY_ARRAYBUFFERSLICE = new ArrayBufferSlice(new Uint8Array().buffer);
 export class SpyroVRAM {
     private data: Uint16Array;
 
-    constructor(buffer: ArrayBuffer) {
-        this.data = new Uint16Array(buffer);
+    constructor(data: ArrayBufferSlice) {
+        this.data = new Uint16Array(data.copyToBuffer());
     }
 
     public getWord(wordX: number, wordY: number): number {
@@ -256,17 +260,144 @@ export function buildSpyroSkybox(data: DataView, gameNumber: number): SpyroSkybo
         }
         partOffsets.push(offset);
     }
-    const vertices: number[][] = [];
-    const colors: number[][] = [];
-    const faces: SkyFace[] = [];
-    for (const offset of partOffsets) {
+    const parts: SkyboxPart[] = Array(partOffsets.length);
+    for (let i = 0; i < partOffsets.length; i++) {
         if (gameNumber == 1) {
-            parseSkyboxPart(data, offset, vertices, colors, faces);
+            parts[i] = parseSkyboxPart(data, partOffsets[i]);
         } else {
-            parseSkyboxPart2(data, offset, vertices, colors, faces);
+            parts[i] = parseSkyboxPart2(data, partOffsets[i]);
         }
     }
-    return { backgroundColor, vertices, colors, faces };
+    return { backgroundColor, parts };
+}
+
+function unpackSkyIndex(b1: number, b2: number, b3: number, b4: number): [number, number, number] {
+    return [(b1 >> 2) | ((b2 & 15) << 6), (b2 >> 4) | ((b3 & 63) << 4), (b3 >> 6) | (b4 << 2)];
+}
+
+function parseSkyboxPart(data: DataView, offset: number): SkyboxPart {
+    let pointer = offset;
+    const vlut: number[][] = [];
+    const clut: number[][] = [];
+
+    // header (24)
+    pointer += 8;
+    const globalY = data.getInt16(pointer, true);
+    const globalZ = data.getInt16(pointer + 2, true);
+    const vertexCount = data.getUint16(pointer + 4, true);
+    const globalX = data.getInt16(pointer + 6, true);
+    const polyCount = data.getUint16(pointer + 8, true);
+    const colorCount = data.getUint16(pointer + 10, true);
+    pointer += 16;
+
+    // vertices (4)
+    for (let i = 0; i < vertexCount; i++) {
+        const b1 = data.getUint8(pointer);
+        const b2 = data.getUint8(pointer + 1);
+        const b3 = data.getUint8(pointer + 2);
+        const b4 = data.getUint8(pointer + 3);
+        vlut.push([
+            ((b3 >> 5) | (b4 << 3)) + globalX,
+            ((b2 >> 2) | ((b3 & 31) << 6)) - globalY,
+            (b1 | ((b2 & 3) << 8)) - globalZ
+        ]);
+        pointer += 4;
+    }
+
+    // colors (4)
+    for (let i = 0; i < colorCount; i++) {
+        clut.push([data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2)]);
+        pointer += 4;
+    }
+
+    // polygons (8)
+    const polygons: SkyPolygon[] = Array(polyCount);
+    for (let i = 0; i < polyCount; i++) {
+        const [vi1, vi2, vi3] = unpackSkyIndex(data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2), data.getUint8(pointer + 3));
+        const [ci1, ci2, ci3] = unpackSkyIndex(data.getUint8(pointer + 4), data.getUint8(pointer + 5), data.getUint8(pointer + 6), data.getUint8(pointer + 7));
+        polygons[i] = { vertices: new Uint32Array([vi1, vi2, vi3]), colors: new Uint32Array([ci1, ci2, ci3]) };
+        pointer += 8;
+    }
+
+    return { vlut, clut, polygons };
+}
+
+function parseSkyboxPart2(data: DataView, partOffset: number): SkyboxPart {
+    let pointer = partOffset;
+    const vlut: number[][] = [];
+    const clut: number[][] = [];
+    const polygons: SkyPolygon[] = [];
+
+    // header (20)
+    pointer += 8;
+    const globalY = data.getInt16(pointer, true);
+    const globalZ = data.getInt16(pointer + 2, true);
+    const vertexCount = data.getUint8(pointer + 4);
+    const colorCount = data.getUint8(pointer + 5);
+    const globalX = data.getInt16(pointer + 6, true);
+    const polyCount = data.getUint16(pointer + 10, true);
+    pointer += 12;
+
+    // vertices (4)
+    for (let i = 0; i < vertexCount; i++) {
+        const b1 = data.getUint8(pointer);
+        const b2 = data.getUint8(pointer + 1);
+        const b3 = data.getUint8(pointer + 2);
+        const b4 = data.getUint8(pointer + 3);
+        vlut.push([
+            ((b3 >> 5) | (b4 << 3)) + globalX,
+            ((b2 >> 2) | ((b3 & 31) << 6)) - globalY,
+            (b1 | ((b2 & 3) << 8)) - globalZ
+        ]);
+        pointer += 4;
+    }
+
+    // colors (4)
+    for (let i = 0; i < colorCount; i++) {
+        clut.push([data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2)]);
+        pointer += 4;
+    }
+
+    // polys
+    let seeker = pointer + polyCount; 
+    for (let i = polyCount; i > 3; i -= 4) {
+        const b1 = data.getUint8(pointer);
+        const b2 = data.getUint8(pointer + 1);
+        const b3 = data.getUint8(pointer + 2);
+        let c0 = (b1 >> 3) | ((b2 & 3) << 5);
+        let c1 = (b2 >> 2) | ((b3 & 1) << 6);
+        let c2 = b3 >> 1;
+        let v0 = data.getUint8(pointer + 3);
+        pointer += 4;
+
+        let v1 = data.getUint8(seeker);
+        const v2 = data.getUint8(seeker + 1);
+        seeker += 2;
+
+        polygons.push({ vertices: new Uint32Array([v0, v1, v2]), colors: new Uint32Array([c0, c1, c2]) });
+
+        let v3Base = v0;
+        let c3Base = c0;
+        for (let i = 0; i < (b1 & 7); i++) {
+            const v2New = data.getUint8(seeker);
+            const cm = data.getUint8(seeker + 1);
+            const c2New = cm & 127;
+
+            polygons.push({ vertices: new Uint32Array([v0, v1, v2New]), colors: new Uint32Array([c0, c1, c2New]) });
+
+            if ((cm & 128) > 0) {
+                v1 = v3Base;
+                c1 = c3Base;
+            }
+            v3Base = v2New;
+            c3Base = c2New;
+            v0 = v2New;
+            c0 = c2New;
+            seeker += 2;
+        }
+    }
+
+    return { vlut, clut, polygons };
 }
 
 export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, gameNumber: number, id: number): SpyroLevel {
@@ -364,7 +495,7 @@ export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, g
         }
     }
 
-    function pushPoly(poly: Polygon, vertexOffset: number, colorOffset: number, waterFlag: number) {
+    function pushPoly(poly: GroundPolygon, vertexOffset: number, colorOffset: number, waterFlag: number) {
         const tileIndex = poly.packedTileIndex & 127;
         if (tileIndex < 0 || tileIndex >= tileCount) {
             // console.warn("Out of bounds tile index for", poly, waterFlag);
@@ -542,7 +673,7 @@ export function buildSpyroLevel(ground: DataView, textures: SpyroTextureStore, g
         pointer += header.mdlColorCount * 4;
 
         for (let i = 0; i < header.mdlPolyCount; i++) {
-            const poly = new Polygon(ground, pointer, gameNumber);
+            const poly = new GroundPolygon(ground, pointer, gameNumber);
             pointer += 16;
             pushPoly(poly, mdlVertexOffset, mdlColorOffset, header.water);
         }
@@ -642,7 +773,7 @@ export function parseSpyroLevelData(data: ArrayBufferSlice, isStandard: boolean)
     }
 
     const subfile2 = new Parser(file.getSubfile(1));
-    const textureHeaders = subfile2.readSection();
+    const textureTable = subfile2.readSection();
     const ground = subfile2.readSection();
     if (isStandard) {
         subfile2.skipSection(); // unknown, has two sub-sections with lists of relative offsets
@@ -681,7 +812,7 @@ export function parseSpyroLevelData(data: ArrayBufferSlice, isStandard: boolean)
 
     // any subfiles beyond 4 are related to dragon statues, majority of data is their voice lines
 
-    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureTable: textureHeaders, ground, sky, mobyInstances };
+    return { vram: new SpyroVRAM(vram), textureTable, ground, sky, mobyInstances };
 }
 
 export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number, levelNumber: number, isFlyover: boolean = false): SpyroLevelData {
@@ -696,7 +827,7 @@ export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number,
     let mobyInstances = EMPTY_ARRAYBUFFERSLICE;
 
     const subfile2 = new Parser(file.getSubfile(1));
-    const textureHeaders = subfile2.readSection();
+    const textureTable = subfile2.readSection();
     if (levelNumber === 0) {
         ground = subfile2.readSection();
     } else {
@@ -756,6 +887,8 @@ export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number,
             subfile.skipSection();
             subfile.skipSection();
             mobyInstances = subfile.readSection();
+        } else {
+            console.warn("Could not find second subfile for sublevel", levelNumber);
         }
     }
 
@@ -785,162 +918,5 @@ export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number,
         }
     }
 
-    return { vram: new SpyroVRAM(vram.copyToBuffer()), textureTable: textureHeaders, ground, sky, mobyInstances };
-}
-
-function parseSkyboxPart(data: DataView, partOffset: number, vertices: number[][], colors: number[][], faces: SkyFace[]): void {
-    let pointer = partOffset;
-    if (pointer + 24 > data.byteLength) {
-        return;
-    }
-    const baseVertexIndex = vertices.length;
-    const baseColorIndex = colors.length;
-
-    // header (24)
-    pointer += 8;
-    const globalY = data.getInt16(pointer, true);
-    const globalZ = data.getInt16(pointer + 2, true);
-    const vertexCount = data.getUint16(pointer + 4, true);
-    const globalX = data.getInt16(pointer + 6, true);
-    const polyCount = data.getUint16(pointer + 8, true);
-    const colorCount = data.getUint16(pointer + 10, true);
-    pointer += 16;
-
-    // vertices (4)
-    for (let i = 0; i < vertexCount; i++) {
-        if (pointer + 4 > data.byteLength) {
-            break;
-        }
-        const b1 = data.getUint8(pointer);
-        const b2 = data.getUint8(pointer + 1);
-        const b3 = data.getUint8(pointer + 2);
-        const b4 = data.getUint8(pointer + 3);
-        vertices.push([
-            ((b3 >> 5) | (b4 << 3)) + globalX,
-            ((b2 >> 2) | ((b3 & 31) << 6)) - globalY,
-            (b1 | ((b2 & 3) << 8)) - globalZ
-        ]);
-        pointer += 4;
-    }
-
-    // colors (4)
-    for (let i = 0; i < colorCount; i++) {
-        if (pointer + 4 > data.byteLength) {
-            break;
-        }
-        colors.push([data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2)]);
-        pointer += 4;
-    }
-
-    function unpackSkyIndex(b1: number, b2: number, b3: number, b4: number): [number, number, number] {
-        return [(b1 >> 2) | ((b2 & 15) << 6), (b2 >> 4) | ((b3 & 63) << 4), (b3 >> 6) | (b4 << 2)];
-    }
-
-    // polygons (8)
-    for (let i = 0; i < polyCount; i++) {
-        if (pointer + 8 > data.byteLength) {
-            break;
-        }
-        const [vi1, vi2, vi3] = unpackSkyIndex(data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2), data.getUint8(pointer + 3));
-        const [ci1, ci2, ci3] = unpackSkyIndex(data.getUint8(pointer + 4), data.getUint8(pointer + 5), data.getUint8(pointer + 6), data.getUint8(pointer + 7));
-        if (vi1 < vertexCount && vi2 < vertexCount && vi3 < vertexCount && ci1 < colorCount && ci2 < colorCount && ci3 < colorCount) {
-            faces.push({
-                indices: [baseVertexIndex + vi1, baseVertexIndex + vi2, baseVertexIndex + vi3],
-                colors: [baseColorIndex + ci1, baseColorIndex + ci2, baseColorIndex + ci3,]
-            });
-        }
-        pointer += 8;
-    }
-}
-
-function parseSkyboxPart2(data: DataView, partOffset: number, vertices: number[][], colors: number[][], faces: SkyFace[]): void {
-    let pointer = partOffset;
-    const baseVertexIndex = vertices.length;
-    const baseColorIndex = colors.length;
-
-    // header (20)
-    if (pointer + 20 > data.byteLength) {
-        return;
-    }
-    pointer += 8;
-    const globalY = data.getInt16(pointer, true);
-    const globalZ = data.getInt16(pointer + 2, true);
-    const vertexCount = data.getUint8(pointer + 4);
-    const colorCount = data.getUint8(pointer + 5);
-    const globalX = data.getInt16(pointer + 6, true);
-    const polyCount = data.getUint16(pointer + 10, true);
-    pointer += 12;
-
-    // vertices (4)
-    for (let i = 0; i < vertexCount; i++) {
-        const b1 = data.getUint8(pointer);
-        const b2 = data.getUint8(pointer + 1);
-        const b3 = data.getUint8(pointer + 2);
-        const b4 = data.getUint8(pointer + 3);
-        vertices.push([
-            ((b3 >> 5) | (b4 << 3)) + globalX,
-            ((b2 >> 2) | ((b3 & 31) << 6)) - globalY,
-            (b1 | ((b2 & 3) << 8)) - globalZ
-        ]);
-        pointer += 4;
-    }
-
-    // colors (4)
-    for (let i = 0; i < colorCount; i++) {
-        colors.push([data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2)]);
-        pointer += 4;
-    }
-
-    // polys
-    let seeker = pointer + polyCount;
-    for (let i = polyCount; i > 3; i -= 4) {
-        if (pointer + 4 > data.byteLength) {
-            return;
-        }
-        const b1 = data.getUint8(pointer);
-        const b2 = data.getUint8(pointer + 1);
-        const b3 = data.getUint8(pointer + 2);
-        let c0 = (b1 >> 3) | ((b2 & 3) << 5);
-        let c1 = (b2 >> 2) | ((b3 & 1) << 6);
-        let c2 = b3 >> 1;
-        let v0 = data.getUint8(pointer + 3);
-        pointer += 4;
-
-        if (seeker + 2 > data.byteLength) {
-            return;
-        }
-        let v1 = data.getUint8(seeker);
-        const v2 = data.getUint8(seeker + 1);
-        seeker += 2;
-
-        let v3Base = v0;
-        let c3Base = c0;
-
-        faces.push({
-            indices: [baseVertexIndex + v0, baseVertexIndex + v1, baseVertexIndex + v2],
-            colors: [baseColorIndex + c0, baseColorIndex + c1, baseColorIndex + c2]
-        });
-
-        for (let i = 0; i < (b1 & 7); i++) {
-            if (seeker + 2 > data.byteLength) {
-                return;
-            }
-            const v2New = data.getUint8(seeker);
-            const cm = data.getUint8(seeker + 1);
-            const c2New = cm & 127;
-            faces.push({
-                indices: [baseVertexIndex + v0, baseVertexIndex + v1, baseVertexIndex + v2New],
-                colors: [baseColorIndex + c0, baseColorIndex + c1, baseColorIndex + c2New]
-            });
-            if ((cm & 128) > 0) {
-                v1 = v3Base;
-                c1 = c3Base;
-            }
-            v3Base = v2New;
-            c3Base = c2New;
-            v0 = v2New;
-            c0 = c2New;
-            seeker += 2;
-        }
-    }
+    return { vram: new SpyroVRAM(vram), textureTable, ground, sky, mobyInstances };
 }

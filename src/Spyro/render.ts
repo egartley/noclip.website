@@ -335,7 +335,7 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_Clip;
+    Mat4x4 u_ViewProj;
 };
 
 varying vec3 v_Color;
@@ -346,7 +346,7 @@ layout(location = 1) in vec3 a_Color;
 
 void main() {
     v_Color = a_Color;
-    gl_Position = UnpackMatrix(u_Clip) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
 }
 #endif
 
@@ -371,21 +371,27 @@ export class SpyroSkyboxRenderer implements Destroyable {
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
 
     constructor(cache: GfxRenderCache, sky: SpyroSkybox) {
-        const expandedPos: number[] = [];
-        const expandedColor: number[] = [];
-        const expandedIndex: number[] = [];
-        let i = 0;
-        for (const face of sky.faces) {
-            for (let k = 0; k < 3; k++) {
-                const vertex = sky.vertices[face.indices[k]];
-                const color = sky.colors[face.colors[k]];
-                expandedPos.push(vertex[0], vertex[1], vertex[2]);
-                expandedColor.push(color[0] / 255, color[1] / 255, color[2] / 255);
-                expandedIndex.push(i++);
+        const vertices: number[] = [];
+        const colors: number[] = [];
+        const indices: number[] = [];
+
+        // combine all parts into single mesh
+        let index = 0;
+        for (const part of sky.parts) {
+            for (const polygon of part.polygons) {
+                for (let i = 0; i < 3; i++) {
+                    const v = part.vlut[polygon.vertices[i]];
+                    const c = part.clut[polygon.colors[i]];
+                    vertices.push(v[0], v[1], v[2]);
+                    colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
+                    indices.push(index++);
+                }
             }
         }
+
         this.gfxProgram = cache.createProgram(new SkyboxShader());
         this.megaStateFlags = makeMegaState({ cullMode: GfxCullMode.None, depthCompare: GfxCompareMode.Always, depthWrite: false }, defaultMegaState);
+
         this.gfxInputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
@@ -397,17 +403,16 @@ export class SpyroSkyboxRenderer implements Destroyable {
             ],
             indexBufferFormat: GfxFormat.U32_R
         });
-        this.drawCount = expandedIndex.length;
-        this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(expandedIndex).buffer), byteOffset: 0 };
+        this.drawCount = indices.length;
+        this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
         this.vertexBufferDescriptors = [
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(expandedPos).buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(expandedColor).buffer), byteOffset: 0 }
+            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
+            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors).buffer), byteOffset: 0 }
         ];
     }
 
     public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
-        const renderInstManager = renderHelper.renderInstManager;
-        const renderInst = renderInstManager.newRenderInst();
+        const renderInst = renderHelper.renderInstManager.newRenderInst();
 
         renderInst.setGfxProgram(this.gfxProgram);
         renderInst.setBindingLayouts(BINDING_LAYOUTS_SKY);
@@ -416,7 +421,7 @@ export class SpyroSkyboxRenderer implements Destroyable {
 
         let offs = renderInst.allocateUniformBuffer(SkyboxShader.ub_SceneParams, 16);
         const d = renderInst.mapUniformBufferF32(SkyboxShader.ub_SceneParams);
-        // u_Clip (16)
+        // u_ViewProj (16)
         computeViewMatrixSkybox(SCRATCH_SKY_VIEW, viewerInput.camera);
         mat4.mul(SCRATCH_CLIP, viewerInput.camera.projectionMatrix, SCRATCH_SKY_VIEW);
         mat4.mul(SCRATCH_CLIP, SCRATCH_CLIP, NOCLIP_SPACE_CORRECTION);
@@ -424,10 +429,9 @@ export class SpyroSkyboxRenderer implements Destroyable {
 
         renderInst.setVertexInput(this.gfxInputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
         renderInst.setDrawCount(this.drawCount);
+        renderHelper.renderInstManager.submitRenderInst(renderInst);
 
-        renderInstManager.submitRenderInst(renderInst);
-
-        renderInstManager.popTemplate();
+        renderHelper.renderInstManager.popTemplate();
     }
 
     public destroy(device: GfxDevice) {
