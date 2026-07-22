@@ -15,8 +15,6 @@ import { buildSpyroTextures } from "./texture.js";
 /*
 TODO
 
-Re-write rendering setup and binary parsing
-    Parsing will be re-done (it's a mess right now) after I make a comprehensive doc of the subfile sections
 Some moby instances aren't detected for regular levels when they should be
 More thoroughly check texture rotation permutations, SWV has some of them wrong. Annoying to check since they're so rare
 Fix or redo water detection. There's some false positives, see the ice in S3 Icy Peak for an example
@@ -71,13 +69,13 @@ class Renderer implements SceneGfx {
         this.textureHolder = new FakeTextureHolder(viewerTextures);
     }
 
-    protected prepareToRender(device: GfxDevice, viewerInput: ViewerRenderInput): void {
+    protected prepareToRender(viewerInput: ViewerRenderInput): void {
         this.renderHelper.renderInstManager.setCurrentList(this.renderInstListMain);
         if (this.levelRenderer.showMobys) {
             this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
         }
-        this.skyboxRenderer.prepareToRender(device, this.renderHelper, viewerInput);
-        this.levelRenderer.prepareToRender(device, this.renderHelper, viewerInput);
+        this.skyboxRenderer.prepareToRender(this.renderHelper, viewerInput);
+        this.levelRenderer.prepareToRender(this.renderHelper, viewerInput);
         this.renderHelper.prepareToRender();
     }
 
@@ -101,7 +99,7 @@ class Renderer implements SceneGfx {
         }
         this.renderHelper.antialiasingSupport.pushPasses(builder, viewerInput, mainColorTargetID);
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
-        this.prepareToRender(device, viewerInput);
+        this.prepareToRender(viewerInput);
         builder.execute();
         this.renderInstListMain.reset();
     }
@@ -110,24 +108,25 @@ class Renderer implements SceneGfx {
         const panel = new Panel();
         panel.customHeaderBackgroundColor = COOL_BLUE_COLOR;
         panel.setTitle(RENDER_HACKS_ICON, "Render Hacks");
-        const toggleLOD = new Checkbox("Use LOD polygons", false);
-        toggleLOD.onchanged = () => {
-            this.levelRenderer.useLOD = toggleLOD.checked
-        };
-        panel.contents.appendChild(toggleLOD.elem);
-        const toggleTextures = new Checkbox("Enable textures", true);
+        if (this.levelRenderer.hasLOD) {
+            const toggleLOD = new Checkbox("Use LOD Polygons", false);
+            toggleLOD.onchanged = () => {
+                this.levelRenderer.useLOD = toggleLOD.checked
+            };
+            panel.contents.appendChild(toggleLOD.elem);
+        }
+        const toggleTextures = new Checkbox("Enable Textures", true);
         toggleTextures.onchanged = () => {
             this.levelRenderer.showTextures = toggleTextures.checked
         };
         panel.contents.appendChild(toggleTextures.elem);
-        if (this.mobyInstances.length === 0) {
-            return [panel];
+        if (this.mobyInstances.length > 0) {
+            const showMobysCheckbox = new Checkbox("Show Moby Positions (Debug)", false);
+            showMobysCheckbox.onchanged = () => {
+                this.levelRenderer.showMobys = showMobysCheckbox.checked
+            };
+            panel.contents.appendChild(showMobysCheckbox.elem);
         }
-        const showMobysCheckbox = new Checkbox("Show moby positions (debug)", false);
-        showMobysCheckbox.onchanged = () => {
-            this.levelRenderer.showMobys = showMobysCheckbox.checked
-        };
-        panel.contents.appendChild(showMobysCheckbox.elem);
         return [panel];
     }
 

@@ -1,20 +1,20 @@
-import { mat4, vec3 } from "gl-matrix";
-import { defaultMegaState, makeMegaState, setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
+import { mat4, ReadonlyMat4, vec3 } from "gl-matrix";
+import { defaultMegaState, makeMegaState } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode, GfxCullMode, GfxBlendMode, GfxBlendFactor, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
+import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
 import { GfxInputLayout, GfxProgram, GfxSampler, GfxTexture } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
-import { SpyroSkybox, SpyroLevel, SpyroMobyInstance, SpyroDrawCall } from "./bin";
+import { SpyroSkybox, SpyroLevel, SpyroMobyInstance, SpyroGroundPart } from "./bin";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { colorNewFromRGBA, White } from "../Color";
 import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
-import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
 import { Destroyable } from "../SceneBase";
 import { computeViewMatrixSkybox } from "../Camera";
+import { AABB } from "../Geometry";
 
 class Shader extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -48,36 +48,37 @@ layout(location = 1) in vec3 a_Color;
 layout(location = 2) in vec2 a_UV;
 
 void main() {
-    vec3 worldPos = a_Position;
+    vec3 pos = a_Position;
     v_Color = a_Color;
     v_UV = a_UV;
 
     if (u_IsWater > 0.1) {
         float t1 = u_Time;
         float t2 = u_Time * 0.12;
-        float phase = dot(worldPos.xz, vec2(0.025, 0.03));
+        float phase = dot(pos.xz, vec2(0.025, 0.03));
         float wave = sin(t1 + phase) * 3.0 + sin(t2 + phase * 1.7) * 1.5;
-        worldPos.z += wave * 1.1;
+        pos.z += wave * 1.1;
     }
 
-    gl_Position = UnpackMatrix(u_Clip) * vec4(worldPos, 1.0);
+    gl_Position = UnpackMatrix(u_Clip) * vec4(pos, 1.0);
 }
 #endif
 
 #ifdef FRAG
 void main() {
-    if (u_LOD == 1.0) {
-        gl_FragColor = vec4(v_Color, 1.0);
-        return;
-    }
+    gl_FragColor = vec4(v_Color, 1.0);
+    // if (u_LOD == 1.0) {
+    //     gl_FragColor = vec4(v_Color, 1.0);
+    //     return;
+    // }
 
-    vec2 uv = v_UV;
-    if (u_Scroll > 0.1) {
-        uv.y = fract(uv.y - u_Time * 0.45);
-    }
-    vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
+    // vec2 uv = v_UV;
+    // if (u_Scroll > 0.1) {
+    //     uv.y = fract(uv.y - u_Time * 0.45);
+    // }
+    // vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
 
-    gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
+    // gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
 }
 #endif
     `;
@@ -120,48 +121,26 @@ const TILE_SCROLL_MAP: Record<number, Record<number, number[]>> = {
     }
 };
 
-function buildBatches(tileGroups: number[][], waterIndices?: number[]): { drawCalls: SpyroDrawCall[], indices: Uint32Array } {
-    const drawCalls: SpyroDrawCall[] = [];
-    const indices: number[] = [];
-    for (let i = 0; i < tileGroups.length; i++) {
-        const group = tileGroups[i];
-        if (group.length === 0) {
-            continue;
-        }
-        const isWater = waterIndices !== undefined && waterIndices.includes(i);
-        drawCalls.push({ tileIndex: i, indexOffset: indices.length, indexCount: group.length, isWater });
-        indices.push(...group);
-    }
-    return { drawCalls, indices: new Uint32Array(indices) };
-}
-
 export class SpyroLevelRenderer {
     public showMobys: boolean = false;
     public useLOD: boolean = false;
+    public hasLOD: boolean = false;
     public showTextures: boolean = true;
     public gfxTextures: GfxTexture[] = [];
     private gfxProgram: GfxProgram;
     private gfxSampler: GfxSampler;
-    private indexBufferDescriptors: GfxIndexBufferDescriptor[];
-    private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
-    private drawCallsGround: SpyroDrawCall[] = [];
-    private drawCallsTransparent: SpyroDrawCall[] = [];
-    private drawCallsLOD: SpyroDrawCall[] = [];
     private inputLayout: GfxInputLayout;
-    private tileCount: number;
-    private gameNumber: number;
     private scrollFlags: number[];
     private scrollSpeed: number;
+    private parts: PartRenderer[];
 
     constructor(cache: GfxRenderCache, level: SpyroLevel, private mobyInstances: SpyroMobyInstance[]) {
-        const device = cache.device;
-        this.gameNumber = level.game;
-        this.tileCount = level.textures.headers.length;
-        this.gfxTextures = new Array(this.tileCount);
-        for (let i = 0; i < this.tileCount; i++) {
+        const tileCount = level.textures.headers.length;
+        this.gfxTextures = new Array(tileCount);
+        for (let i = 0; i < tileCount; i++) {
             const rgba = level.textures.colors[i];
             const s = level.textures.headers[i].cor === undefined ? 32 : 64;
-            const texture = device.createTexture({
+            const texture = cache.device.createTexture({
                 width: s, height: s,
                 numLevels: s / 32,
                 pixelFormat: GfxFormat.U8_RGBA_NORM,
@@ -169,21 +148,21 @@ export class SpyroLevelRenderer {
                 dimension: GfxTextureDimension.n2D,
                 depthOrArrayLayers: 1
             });
-            device.setResourceName(texture, `tile_${i}`);
-            device.uploadTextureData(texture, 0, rgba);
+            cache.device.setResourceName(texture, `tile_${i}`);
+            cache.device.uploadTextureData(texture, 0, rgba);
             this.gfxTextures[i] = texture;
         }
 
-        this.scrollFlags = Array(this.tileCount).fill(0.0);
-        if (level.id in TILE_SCROLL_MAP[level.game]) {
-            for (const ti of TILE_SCROLL_MAP[level.game][level.id]) {
-                if (ti != null && ti >= 0 && ti < this.tileCount) {
+        this.scrollFlags = Array(tileCount).fill(0.0);
+        if (level.id in TILE_SCROLL_MAP[level.gameNumber]) {
+            for (const ti of TILE_SCROLL_MAP[level.gameNumber][level.id]) {
+                if (ti != null && ti >= 0 && ti < tileCount) {
                     this.scrollFlags[ti] = 1.0;
                 }
             }
         }
         // speed is hardcoded for now to roughly match appearance in game
-        this.scrollSpeed = 0.001 * (this.gameNumber === 1 ? 2.6 : 2);
+        this.scrollSpeed = 0.001 * (level.gameNumber === 1 ? 2.6 : 2);
 
         this.gfxProgram = cache.createProgram(new Shader());
         this.gfxSampler = cache.createSampler({
@@ -193,26 +172,6 @@ export class SpyroLevelRenderer {
             wrapS: GfxWrapMode.Clamp,
             wrapT: GfxWrapMode.Clamp
         });
-
-        const groundBatches = buildBatches(level.indicesGround);
-        const transparentBatches = buildBatches(level.indicesTransparent, level.waterIndices);
-        const lodBatches = buildBatches(level.indicesLOD);
-
-        this.vertexBufferDescriptors = [
-            { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, level.vertices.buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, level.colors.buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, level.uvs.buffer), byteOffset: 0 }
-        ];
-        this.indexBufferDescriptors = [
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, groundBatches.indices.buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, transparentBatches.indices.buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, lodBatches.indices.buffer), byteOffset: 0 }
-        ];
-
-        this.drawCallsGround = groundBatches.drawCalls;
-        this.drawCallsTransparent = transparentBatches.drawCalls;
-        this.drawCallsLOD = lodBatches.drawCalls;
-
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
@@ -226,11 +185,18 @@ export class SpyroLevelRenderer {
             ],
             indexBufferFormat: GfxFormat.U32_R
         });
+
+        this.parts = Array(level.parts.length);
+        for (let i = 0; i < level.parts.length; i++) {
+            this.parts[i] = new PartRenderer(cache, level.parts[i], this.inputLayout);
+            if (level.parts[i].polygonsLOD.length > 0) {
+                this.hasLOD = true;
+            }
+        }
     }
 
-    public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
-        const renderInstManager = renderHelper.renderInstManager;
-        const template = renderInstManager.pushTemplate();
+    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
+        const template = renderHelper.renderInstManager.pushTemplate();
         template.setGfxProgram(this.gfxProgram);
         template.setBindingLayouts(BINDING_LAYOUTS);
         template.setUniformBuffer(renderHelper.uniformBuffer);
@@ -245,49 +211,15 @@ export class SpyroLevelRenderer {
         // u_LOD (1)
         d[offs++] = this.useLOD || !this.showTextures ? 1.0 : 0.0;
 
-        if (this.useLOD) {
-            this.renderDrawCalls(renderInstManager, this.drawCallsLOD, this.indexBufferDescriptors[2], false);
-        } else {
-            this.renderDrawCalls(renderInstManager, this.drawCallsGround, this.indexBufferDescriptors[0], false);
-            this.renderDrawCalls(renderInstManager, this.drawCallsTransparent, this.indexBufferDescriptors[1], true);
+        for (const part of this.parts) {
+            part.prepareToRender(renderHelper, viewerInput, this.useLOD);
         }
 
         if (this.showMobys) {
             this.drawMobys(renderHelper);
         }
 
-        renderInstManager.popTemplate();
-    }
-
-    private renderDrawCalls(renderInstManager: GfxRenderInstManager, drawCalls: SpyroDrawCall[], indexBuffer: GfxIndexBufferDescriptor, additiveBlend: boolean) {
-        for (const drawCall of drawCalls) {
-            const renderInst = renderInstManager.newRenderInst();
-
-            let offs = renderInst.allocateUniformBuffer(Shader.ub_BatchParams, 3);
-            const d = renderInst.mapUniformBufferF32(Shader.ub_BatchParams);
-            // u_Brightness (1)
-            d[offs++] = additiveBlend ? BRIGHTNESS_TRANSPARENT : BRIGHTNESS_OPAQUE;
-            // u_IsWater (1)
-            d[offs++] = drawCall.isWater ? 1.0 : 0.0;
-            // u_Scroll (1)
-            d[offs++] = this.scrollFlags[drawCall.tileIndex];
-
-            const megaState = renderInst.getMegaStateFlags();
-            if (additiveBlend) {
-                megaState.depthWrite = false;
-                setAttachmentStateSimple(megaState, {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                    blendDstFactor: GfxBlendFactor.One
-                });
-            }
-            renderInst.setMegaStateFlags(megaState);
-            renderInst.setSamplerBindingsFromTextureMappings([{ gfxTexture: this.gfxTextures[drawCall.tileIndex], gfxSampler: this.gfxSampler }]);
-            renderInst.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, indexBuffer);
-            renderInst.setDrawCount(drawCall.indexCount, drawCall.indexOffset);
-
-            renderInstManager.submitRenderInst(renderInst);
-        }
+        renderHelper.renderInstManager.popTemplate();
     }
 
     private drawMobys(renderHelper: GfxRenderHelper): void {
@@ -314,14 +246,157 @@ export class SpyroLevelRenderer {
     }
 
     public destroy(device: GfxDevice) {
+        for (const p of this.parts) {
+            p.destroy(device);
+        }
+        for (const tex of this.gfxTextures) {
+            device.destroyTexture(tex);
+        }
+    }
+}
+
+// makes bbox points for set of vertices for cheaper culling
+function getBboxPoints(vertices: number[]): number[] {
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (let i = 0; i < vertices.length; i += 3) {
+        min.x = Math.min(min.x, vertices[i]);
+        min.y = Math.min(min.y, vertices[i + 1]);
+        min.z = Math.min(min.z, vertices[i + 2]);
+        max.x = Math.max(max.x, vertices[i]);
+        max.y = Math.max(max.y, vertices[i + 1]);
+        max.z = Math.max(max.z, vertices[i + 2]);
+    }
+    const box = new AABB(min.x, min.y, min.z, max.x, max.y, max.z);
+    box.transform(box, NOCLIP_SPACE_CORRECTION);
+    return [
+        box.min[0], box.min[1], box.min[2],
+        box.max[0], box.min[1], box.min[2],
+        box.min[0], box.max[1], box.min[2],
+        box.max[0], box.max[1], box.min[2],
+        box.min[0], box.min[1], box.max[2],
+        box.max[0], box.min[1], box.max[2],
+        box.min[0], box.max[1], box.max[2],
+        box.max[0], box.max[1], box.max[2],
+    ];
+}
+
+// much cheaper frustum culling than with aabb
+function inView(bbox: number[], m: ReadonlyMat4) {
+    let aol = true, aor = true;
+    let aob = true, aot = true;
+    let aon = true, aof = true;
+    for (let i = 0; i < 24; i += 3) {
+        const x = bbox[i], y = bbox[i + 1], z = bbox[i + 2];
+        const xw = x * m[0] + y * m[4] + z * m[8] + m[12];
+        const yw = x * m[1] + y * m[5] + z * m[9] + m[13];
+        const zw = x * m[2] + y * m[6] + z * m[10] + m[14];
+        const ww = x * m[3] + y * m[7] + z * m[11] + m[15];
+        if (xw >= -ww && xw <= ww && yw >= -ww && yw <= ww && zw >= 0 && zw <= ww) {
+            return true;
+        }
+        if (xw > -ww) aol = false;
+        if (xw < ww) aor = false;
+        if (yw > -ww) aob = false;
+        if (yw < ww) aot = false;
+        if (zw > 0) aon = false;
+        if (zw < ww) aof = false;
+    }
+    if (aol || aor || aob || aot || aon || aof) {
+        return false;
+    }
+    return true;
+}
+
+class PartRenderer {
+    private indexBufferDescriptors: GfxIndexBufferDescriptor[] = [];
+    private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
+    private hasLOD: boolean;
+    private drawCount: number;
+    private drawCountLOD: number;
+    private indicesIndex: number = 0;
+    private indicesIndexLOD: number = 0;
+    private bbox: number[];
+    private bboxLOD: number[];
+
+    constructor(cache: GfxRenderCache, part: SpyroGroundPart, private inputLayout: GfxInputLayout) {
+        const vertices: number[] = [];
+        const colors: number[] = [];
+        const uvs: number[] = [];
+        const indices: number[] = [];
+        const indicesLOD: number[] = [];
+
+        let index = 0;
+        for (const polygon of part.polygons) {
+            for (let i = 0; i < 3; i++) {
+                const v = part.vlut[polygon.vertices[i]];
+                const c = part.clut[polygon.colors[i]].map(c => c / 255);
+                vertices.push(v[0], v[1], v[2]);
+                colors.push(c[0], c[1], c[2]);
+                uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
+                indices.push(index++);
+            }
+        }
+        this.bbox = getBboxPoints(vertices);
+        this.drawCount = indices.length;
+
+        for (const polygon of part.polygonsLOD) {
+            for (let i = 0; i < 3; i++) {
+                const v = part.vlutLOD[polygon.vertices[i]];
+                const c = part.clutLOD[polygon.colors[i]].map(c => c / 255);
+                vertices.push(v[0], v[1], v[2]);
+                colors.push(c[0], c[1], c[2]);
+                uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
+                indicesLOD.push(index++);
+            }
+        }
+        this.bboxLOD = getBboxPoints(vertices.slice(this.drawCount));
+        this.drawCountLOD = indicesLOD.length;
+        this.hasLOD = this.drawCountLOD > 0;
+
+        this.vertexBufferDescriptors = [
+            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
+            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors).buffer), byteOffset: 0 },
+            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(uvs).buffer), byteOffset: 0 }
+        ];
+        // some parts may have only mdl or lod, but usually they will have both
+        if (this.drawCount > 0) {
+            this.indicesIndex = this.indexBufferDescriptors.length;
+            this.indexBufferDescriptors.push({ buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 });
+        }
+        if (this.drawCountLOD > 0) {
+            this.indicesIndexLOD = this.indexBufferDescriptors.length;
+            this.indexBufferDescriptors.push({ buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indicesLOD).buffer), byteOffset: 0 });
+        }
+    }
+
+    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, useLOD: boolean) {
+        const lod = this.hasLOD && useLOD;
+        const dc = lod ? this.drawCountLOD : this.drawCount;
+        if (dc > 0 && inView(lod ? this.bboxLOD : this.bbox, viewerInput.camera.clipFromWorldMatrix)) {
+            const renderInst = renderHelper.renderInstManager.newRenderInst();
+            let offs = renderInst.allocateUniformBuffer(Shader.ub_BatchParams, 3);
+            const d = renderInst.mapUniformBufferF32(Shader.ub_BatchParams);
+            // u_Brightness (1)
+            d[offs++] = BRIGHTNESS_OPAQUE;
+            // u_IsWater (1)
+            d[offs++] = 0.0;
+            // u_Scroll (1)
+            d[offs++] = 0.0;
+
+            renderInst.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptors[lod ? this.indicesIndexLOD : this.indicesIndex]);
+            renderInst.setDrawCount(dc);
+
+            renderHelper.renderInstManager.submitRenderInst(renderInst);
+        }
+    }
+
+    public destroy(device: GfxDevice) {
         for (const d of this.indexBufferDescriptors) {
             device.destroyBuffer(d.buffer);
         }
         for (const d of this.vertexBufferDescriptors) {
             device.destroyBuffer(d.buffer);
-        }
-        for (const tex of this.gfxTextures) {
-            device.destroyTexture(tex);
         }
     }
 }
@@ -335,7 +410,7 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_ViewProj;
+    Mat4x4 u_Clip;
 };
 
 varying vec3 v_Color;
@@ -346,7 +421,7 @@ layout(location = 1) in vec3 a_Color;
 
 void main() {
     v_Color = a_Color;
-    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_Clip) * vec4(a_Position, 1.0);
 }
 #endif
 
@@ -375,15 +450,15 @@ export class SpyroSkyboxRenderer implements Destroyable {
         const colors: number[] = [];
         const indices: number[] = [];
 
-        // combine all parts into single mesh
+        // combine all parts into a single mesh
         let index = 0;
         for (const part of sky.parts) {
             for (const polygon of part.polygons) {
                 for (let i = 0; i < 3; i++) {
                     const v = part.vlut[polygon.vertices[i]];
-                    const c = part.clut[polygon.colors[i]];
+                    const c = part.clut[polygon.colors[i]].map(c => c / 255);
                     vertices.push(v[0], v[1], v[2]);
-                    colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
+                    colors.push(c[0], c[1], c[2]);
                     indices.push(index++);
                 }
             }
@@ -411,7 +486,7 @@ export class SpyroSkyboxRenderer implements Destroyable {
         ];
     }
 
-    public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
+    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
         const renderInst = renderHelper.renderInstManager.newRenderInst();
 
         renderInst.setGfxProgram(this.gfxProgram);
@@ -421,7 +496,7 @@ export class SpyroSkyboxRenderer implements Destroyable {
 
         let offs = renderInst.allocateUniformBuffer(SkyboxShader.ub_SceneParams, 16);
         const d = renderInst.mapUniformBufferF32(SkyboxShader.ub_SceneParams);
-        // u_ViewProj (16)
+        // u_Clip (16)
         computeViewMatrixSkybox(SCRATCH_SKY_VIEW, viewerInput.camera);
         mat4.mul(SCRATCH_CLIP, viewerInput.camera.projectionMatrix, SCRATCH_SKY_VIEW);
         mat4.mul(SCRATCH_CLIP, SCRATCH_CLIP, NOCLIP_SPACE_CORRECTION);
@@ -430,8 +505,6 @@ export class SpyroSkyboxRenderer implements Destroyable {
         renderInst.setVertexInput(this.gfxInputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
         renderInst.setDrawCount(this.drawCount);
         renderHelper.renderInstManager.submitRenderInst(renderInst);
-
-        renderHelper.renderInstManager.popTemplate();
     }
 
     public destroy(device: GfxDevice) {
