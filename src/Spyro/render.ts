@@ -2,8 +2,8 @@ import { mat4, ReadonlyMat4, vec3 } from "gl-matrix";
 import { defaultMegaState, makeMegaState } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor } from "../gfx/platform/GfxPlatform";
-import { GfxInputLayout, GfxProgram, GfxSampler, GfxTexture } from "../gfx/platform/GfxPlatformImpl";
+import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor, GfxSamplerBinding } from "../gfx/platform/GfxPlatform";
+import { GfxInputLayout, GfxProgram } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
@@ -15,10 +15,12 @@ import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
 import { Destroyable } from "../SceneBase";
 import { computeViewMatrixSkybox } from "../Camera";
 import { AABB } from "../Geometry";
+import { SpyroTexture } from "./texture";
+import { GfxRenderInst } from "../gfx/render/GfxRenderInstManager";
 
 class Shader extends DeviceProgram {
     public static ub_SceneParams = 0;
-    public static ub_BatchParams = 1;
+    public static ub_DrawParams = 1;
 
     public override both = `
 precision highp float;
@@ -28,10 +30,10 @@ ${GfxShaderLibrary.MatrixLibrary}
 layout(std140) uniform ub_SceneParams {
     Mat4x4 u_Clip;
     float u_Time;
-    float u_LOD;
+    float u_ApplyTextures;
 };
 
-layout(std140) uniform ub_BatchParams {
+layout(std140) uniform ub_DrawParams {
     float u_Brightness;
     float u_IsWater;
     float u_Scroll;
@@ -48,37 +50,36 @@ layout(location = 1) in vec3 a_Color;
 layout(location = 2) in vec2 a_UV;
 
 void main() {
-    vec3 pos = a_Position;
+    // vec3 pos = a_Position;
     v_Color = a_Color;
     v_UV = a_UV;
 
-    if (u_IsWater > 0.1) {
-        float t1 = u_Time;
-        float t2 = u_Time * 0.12;
-        float phase = dot(pos.xz, vec2(0.025, 0.03));
-        float wave = sin(t1 + phase) * 3.0 + sin(t2 + phase * 1.7) * 1.5;
-        pos.z += wave * 1.1;
-    }
+    // if (u_IsWater > 0.1) {
+    //     float t1 = u_Time;
+    //     float t2 = u_Time * 0.12;
+    //     float phase = dot(pos.xz, vec2(0.025, 0.03));
+    //     float wave = sin(t1 + phase) * 3.0 + sin(t2 + phase * 1.7) * 1.5;
+    //     pos.z += wave * 1.1;
+    // }
 
-    gl_Position = UnpackMatrix(u_Clip) * vec4(pos, 1.0);
+    gl_Position = UnpackMatrix(u_Clip) * vec4(a_Position, 1.0);
 }
 #endif
 
 #ifdef FRAG
 void main() {
-    gl_FragColor = vec4(v_Color, 1.0);
-    // if (u_LOD == 1.0) {
-    //     gl_FragColor = vec4(v_Color, 1.0);
-    //     return;
-    // }
+    if (u_ApplyTextures < 1.0) {
+        gl_FragColor = vec4(v_Color, 1.0);
+        return;
+    }
 
-    // vec2 uv = v_UV;
-    // if (u_Scroll > 0.1) {
-    //     uv.y = fract(uv.y - u_Time * 0.45);
-    // }
-    // vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
+    vec2 uv = v_UV;
+    if (u_Scroll > 0.1) {
+        uv.y = fract(uv.y - u_Time * 0.45);
+    }
+    vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
 
-    // gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
+    gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
 }
 #endif
     `;
@@ -121,57 +122,91 @@ const TILE_SCROLL_MAP: Record<number, Record<number, number[]>> = {
     }
 };
 
+function getAABB(vertices: number[]): AABB {
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (let i = 0; i < vertices.length; i += 3) {
+        min.x = Math.min(min.x, vertices[i]);
+        min.y = Math.min(min.y, vertices[i + 1]);
+        min.z = Math.min(min.z, vertices[i + 2]);
+        max.x = Math.max(max.x, vertices[i]);
+        max.y = Math.max(max.y, vertices[i + 1]);
+        max.z = Math.max(max.z, vertices[i + 2]);
+    }
+    const box = new AABB(min.x, min.y, min.z, max.x, max.y, max.z);
+    box.transform(box, NOCLIP_SPACE_CORRECTION);
+    return box;
+}
+
+function getBboxPoints(box: AABB): number[] {
+    return [
+        box.min[0], box.min[1], box.min[2],
+        box.max[0], box.min[1], box.min[2],
+        box.min[0], box.max[1], box.min[2],
+        box.max[0], box.max[1], box.min[2],
+        box.min[0], box.min[1], box.max[2],
+        box.max[0], box.min[1], box.max[2],
+        box.min[0], box.max[1], box.max[2],
+        box.max[0], box.max[1], box.max[2]
+    ];
+}
+
+// much cheaper frustum culling than with aabb
+function inView(bbox: number[], m: ReadonlyMat4) {
+    let aol = true, aor = true;
+    let aob = true, aot = true;
+    let aon = true, aof = true;
+    for (let i = 0; i < 24; i += 3) {
+        const x = bbox[i], y = bbox[i + 1], z = bbox[i + 2];
+        const xw = x * m[0] + y * m[4] + z * m[8] + m[12];
+        const yw = x * m[1] + y * m[5] + z * m[9] + m[13];
+        const zw = x * m[2] + y * m[6] + z * m[10] + m[14];
+        const ww = x * m[3] + y * m[7] + z * m[11] + m[15];
+        if (xw >= -ww && xw <= ww && yw >= -ww && yw <= ww && zw >= 0 && zw <= ww) {
+            return true;
+        }
+        if (xw > -ww) aol = false;
+        if (xw < ww) aor = false;
+        if (yw > -ww) aob = false;
+        if (yw < ww) aot = false;
+        if (zw > 0) aon = false;
+        if (zw < ww) aof = false;
+    }
+    if (aol || aor || aob || aot || aon || aof) {
+        return false;
+    }
+    return true;
+}
+
 export class SpyroLevelRenderer {
     public showMobys: boolean = false;
+    public showTextures: boolean = true;
     public useLOD: boolean = false;
     public hasLOD: boolean = false;
-    public showTextures: boolean = true;
-    public gfxTextures: GfxTexture[] = [];
+    public textures: SpyroTexture[];
     private gfxProgram: GfxProgram;
-    private gfxSampler: GfxSampler;
+    private gfxSamplerBindings: GfxSamplerBinding[][];
     private inputLayout: GfxInputLayout;
-    private scrollFlags: number[];
     private scrollSpeed: number;
     private parts: PartRenderer[];
 
-    constructor(cache: GfxRenderCache, level: SpyroLevel, private mobyInstances: SpyroMobyInstance[]) {
-        const tileCount = level.textures.headers.length;
-        this.gfxTextures = new Array(tileCount);
-        for (let i = 0; i < tileCount; i++) {
-            const rgba = level.textures.colors[i];
-            const s = level.textures.headers[i].cor === undefined ? 32 : 64;
-            const texture = cache.device.createTexture({
-                width: s, height: s,
-                numLevels: s / 32,
-                pixelFormat: GfxFormat.U8_RGBA_NORM,
-                usage: GfxTextureUsage.Sampled,
-                dimension: GfxTextureDimension.n2D,
-                depthOrArrayLayers: 1
-            });
-            cache.device.setResourceName(texture, `tile_${i}`);
-            cache.device.uploadTextureData(texture, 0, rgba);
-            this.gfxTextures[i] = texture;
-        }
-
-        this.scrollFlags = Array(tileCount).fill(0.0);
+    constructor(cache: GfxRenderCache, level: SpyroLevel, public mobyInstances: SpyroMobyInstance[]) {
+        const textureCount = level.textures.headers.length;
+        const scrollFlags = Array(textureCount).fill(false);
         if (level.id in TILE_SCROLL_MAP[level.gameNumber]) {
             for (const ti of TILE_SCROLL_MAP[level.gameNumber][level.id]) {
-                if (ti != null && ti >= 0 && ti < tileCount) {
-                    this.scrollFlags[ti] = 1.0;
-                }
+                scrollFlags[ti] = true;
             }
         }
+        this.textures = new Array(textureCount);
+        for (let i = 0; i < textureCount; i++) {
+            this.textures[i] = new SpyroTexture(cache.device, level.textures.colors[i], level.textures.headers[i], i, scrollFlags[i]);
+        }
+
         // speed is hardcoded for now to roughly match appearance in game
         this.scrollSpeed = 0.001 * (level.gameNumber === 1 ? 2.6 : 2);
 
         this.gfxProgram = cache.createProgram(new Shader());
-        this.gfxSampler = cache.createSampler({
-            minFilter: GfxTexFilterMode.Point,
-            magFilter: GfxTexFilterMode.Point,
-            mipFilter: GfxMipFilterMode.Nearest,
-            wrapS: GfxWrapMode.Clamp,
-            wrapT: GfxWrapMode.Clamp
-        });
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
@@ -185,6 +220,17 @@ export class SpyroLevelRenderer {
             ],
             indexBufferFormat: GfxFormat.U32_R
         });
+        const gfxSampler = cache.createSampler({
+            minFilter: GfxTexFilterMode.Point,
+            magFilter: GfxTexFilterMode.Point,
+            mipFilter: GfxMipFilterMode.Nearest,
+            wrapS: GfxWrapMode.Clamp,
+            wrapT: GfxWrapMode.Clamp
+        });
+        this.gfxSamplerBindings = Array(this.textures.length);
+        for (let i = 0; i < this.textures.length; i++) {
+            this.gfxSamplerBindings[i] = [{ gfxTexture: this.textures[i].gfxTexture, gfxSampler }];
+        }
 
         this.parts = Array(level.parts.length);
         for (let i = 0; i < level.parts.length; i++) {
@@ -208,11 +254,11 @@ export class SpyroLevelRenderer {
         offs += fillMatrix4x4(d, offs, SCRATCH_CLIP);
         // u_Time (1)
         d[offs++] = viewerInput.time * this.scrollSpeed;
-        // u_LOD (1)
-        d[offs++] = this.useLOD || !this.showTextures ? 1.0 : 0.0;
+        // u_ApplyTextures (1)
+        d[offs++] = !this.useLOD && this.showTextures ? 1.0 : 0.0;
 
         for (const part of this.parts) {
-            part.prepareToRender(renderHelper, viewerInput, this.useLOD);
+            part.prepareToRender(renderHelper, viewerInput, this.gfxSamplerBindings, this.useLOD);
         }
 
         if (this.showMobys) {
@@ -249,84 +295,48 @@ export class SpyroLevelRenderer {
         for (const p of this.parts) {
             p.destroy(device);
         }
-        for (const tex of this.gfxTextures) {
-            device.destroyTexture(tex);
+        for (const t of this.textures) {
+            device.destroyTexture(t.gfxTexture);
         }
     }
 }
 
-// makes bbox points for set of vertices for cheaper culling
-function getBboxPoints(vertices: number[]): number[] {
-    const min = { x: Infinity, y: Infinity, z: Infinity };
-    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-    for (let i = 0; i < vertices.length; i += 3) {
-        min.x = Math.min(min.x, vertices[i]);
-        min.y = Math.min(min.y, vertices[i + 1]);
-        min.z = Math.min(min.z, vertices[i + 2]);
-        max.x = Math.max(max.x, vertices[i]);
-        max.y = Math.max(max.y, vertices[i + 1]);
-        max.z = Math.max(max.z, vertices[i + 2]);
-    }
-    const box = new AABB(min.x, min.y, min.z, max.x, max.y, max.z);
-    box.transform(box, NOCLIP_SPACE_CORRECTION);
-    return [
-        box.min[0], box.min[1], box.min[2],
-        box.max[0], box.min[1], box.min[2],
-        box.min[0], box.max[1], box.min[2],
-        box.max[0], box.max[1], box.min[2],
-        box.min[0], box.min[1], box.max[2],
-        box.max[0], box.min[1], box.max[2],
-        box.min[0], box.max[1], box.max[2],
-        box.max[0], box.max[1], box.max[2],
-    ];
-}
-
-// much cheaper frustum culling than with aabb
-function inView(bbox: number[], m: ReadonlyMat4) {
-    let aol = true, aor = true;
-    let aob = true, aot = true;
-    let aon = true, aof = true;
-    for (let i = 0; i < 24; i += 3) {
-        const x = bbox[i], y = bbox[i + 1], z = bbox[i + 2];
-        const xw = x * m[0] + y * m[4] + z * m[8] + m[12];
-        const yw = x * m[1] + y * m[5] + z * m[9] + m[13];
-        const zw = x * m[2] + y * m[6] + z * m[10] + m[14];
-        const ww = x * m[3] + y * m[7] + z * m[11] + m[15];
-        if (xw >= -ww && xw <= ww && yw >= -ww && yw <= ww && zw >= 0 && zw <= ww) {
-            return true;
-        }
-        if (xw > -ww) aol = false;
-        if (xw < ww) aor = false;
-        if (yw > -ww) aob = false;
-        if (yw < ww) aot = false;
-        if (zw > 0) aon = false;
-        if (zw < ww) aof = false;
-    }
-    if (aol || aor || aob || aot || aon || aof) {
-        return false;
-    }
-    return true;
+interface DrawCall {
+    texture: number;
+    count: number;
+    offset: number;
 }
 
 class PartRenderer {
-    private indexBufferDescriptors: GfxIndexBufferDescriptor[] = [];
+    public hasMDL: boolean;
+    public hasLOD: boolean;
+    private indexBufferDescriptor: GfxIndexBufferDescriptor;
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
-    private hasLOD: boolean;
     private drawCount: number;
     private drawCountLOD: number;
-    private indicesIndex: number = 0;
-    private indicesIndexLOD: number = 0;
-    private bbox: number[];
-    private bboxLOD: number[];
+    private drawCalls: DrawCall[];
+    private indexLODOffset: number;
+    private bbox: AABB;
+    private bboxPoints: number[];
+    private bboxLOD: AABB;
+    private bboxPointsLOD: number[];
 
     constructor(cache: GfxRenderCache, part: SpyroGroundPart, private inputLayout: GfxInputLayout) {
         const vertices: number[] = [];
         const colors: number[] = [];
         const uvs: number[] = [];
         const indices: number[] = [];
-        const indicesLOD: number[] = [];
 
-        let index = 0;
+        // build mdl vertex buffers and gather draw call ordering
+        const callMapping: number[] = [];
+        for (const polygon of part.polygons) {
+            if (!callMapping.includes(polygon.textureIndex)) {
+                callMapping.push(polygon.textureIndex);
+            }
+        }
+        callMapping.sort();
+        this.drawCalls = Array(callMapping.length);
+        const callIndices: number[] = [];
         for (const polygon of part.polygons) {
             for (let i = 0; i < 3; i++) {
                 const v = part.vlut[polygon.vertices[i]];
@@ -334,12 +344,29 @@ class PartRenderer {
                 vertices.push(v[0], v[1], v[2]);
                 colors.push(c[0], c[1], c[2]);
                 uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                indices.push(index++);
+                callIndices.push(polygon.textureIndex);
             }
         }
-        this.bbox = getBboxPoints(vertices);
+        // build mdl indices sequentially by texture index, keep track of counts and offsets
+        for (let i = 0; i < callMapping.length; i++) {
+            let count = 0;
+            const offset = indices.length;
+            for (let j = 0; j < callIndices.length; j++) {
+                if (callMapping.indexOf(callIndices[j]) === i) {
+                    indices.push(j);
+                    count++;
+                }
+            }
+            this.drawCalls[i] = { texture: callMapping[i], count, offset };
+        }
+        this.bbox = getAABB(vertices);
+        this.bboxPoints = getBboxPoints(this.bbox);
         this.drawCount = indices.length;
+        this.indexLODOffset = indices.length;
+        this.hasMDL = indices.length > 0;
 
+        // append lod indices after mdl indices
+        let index = this.drawCount;
         for (const polygon of part.polygonsLOD) {
             for (let i = 0; i < 3; i++) {
                 const v = part.vlutLOD[polygon.vertices[i]];
@@ -347,11 +374,12 @@ class PartRenderer {
                 vertices.push(v[0], v[1], v[2]);
                 colors.push(c[0], c[1], c[2]);
                 uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                indicesLOD.push(index++);
+                indices.push(index++);
             }
         }
-        this.bboxLOD = getBboxPoints(vertices.slice(this.drawCount));
-        this.drawCountLOD = indicesLOD.length;
+        this.bboxLOD = getAABB(vertices.slice(this.drawCount));
+        this.bboxPointsLOD = getBboxPoints(this.bboxLOD);
+        this.drawCountLOD = indices.length - this.indexLODOffset;
         this.hasLOD = this.drawCountLOD > 0;
 
         this.vertexBufferDescriptors = [
@@ -359,45 +387,56 @@ class PartRenderer {
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors).buffer), byteOffset: 0 },
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(uvs).buffer), byteOffset: 0 }
         ];
-        // some parts may have only mdl or lod, but usually they will have both
-        if (this.drawCount > 0) {
-            this.indicesIndex = this.indexBufferDescriptors.length;
-            this.indexBufferDescriptors.push({ buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 });
-        }
-        if (this.drawCountLOD > 0) {
-            this.indicesIndexLOD = this.indexBufferDescriptors.length;
-            this.indexBufferDescriptors.push({ buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indicesLOD).buffer), byteOffset: 0 });
-        }
+        this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
     }
 
-    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, useLOD: boolean) {
+    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, gfxSamplerBindings: GfxSamplerBinding[][], useLOD: boolean) {
         const lod = this.hasLOD && useLOD;
         const dc = lod ? this.drawCountLOD : this.drawCount;
-        if (dc > 0 && inView(lod ? this.bboxLOD : this.bbox, viewerInput.camera.clipFromWorldMatrix)) {
-            const renderInst = renderHelper.renderInstManager.newRenderInst();
-            let offs = renderInst.allocateUniformBuffer(Shader.ub_BatchParams, 3);
-            const d = renderInst.mapUniformBufferF32(Shader.ub_BatchParams);
-            // u_Brightness (1)
-            d[offs++] = BRIGHTNESS_OPAQUE;
-            // u_IsWater (1)
-            d[offs++] = 0.0;
-            // u_Scroll (1)
-            d[offs++] = 0.0;
+        if (dc > 0 && inView(lod ? this.bboxPointsLOD : this.bboxPoints, viewerInput.camera.clipFromWorldMatrix)) {
+            const template = renderHelper.renderInstManager.pushTemplate();
+            template.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
+            this.fillDrawParams(template);
 
-            renderInst.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptors[lod ? this.indicesIndexLOD : this.indicesIndex]);
-            renderInst.setDrawCount(dc);
+            if (lod) {
+                const renderInst = renderHelper.renderInstManager.newRenderInst();
 
-            renderHelper.renderInstManager.submitRenderInst(renderInst);
+                // this.fillDrawParams(renderInst);
+                renderInst.setDrawCount(dc, this.indexLODOffset);
+
+                renderHelper.renderInstManager.submitRenderInst(renderInst);
+            } else {
+                for (const drawCall of this.drawCalls) {
+                    const renderInst = renderHelper.renderInstManager.newRenderInst();
+
+                    // this.fillDrawParams(renderInst);
+                    renderInst.setSamplerBindingsFromTextureMappings(gfxSamplerBindings[drawCall.texture]);
+                    renderInst.setDrawCount(drawCall.count, drawCall.offset);
+
+                    renderHelper.renderInstManager.submitRenderInst(renderInst);
+                }
+            }
+
+            renderHelper.renderInstManager.popTemplate();
         }
     }
 
     public destroy(device: GfxDevice) {
-        for (const d of this.indexBufferDescriptors) {
-            device.destroyBuffer(d.buffer);
-        }
+        device.destroyBuffer(this.indexBufferDescriptor.buffer);
         for (const d of this.vertexBufferDescriptors) {
             device.destroyBuffer(d.buffer);
         }
+    }
+
+    private fillDrawParams(renderInst: GfxRenderInst) {
+        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 3);
+        const d = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
+        // u_Brightness (1)
+        d[offs++] = BRIGHTNESS_OPAQUE;
+        // u_IsWater (1)
+        d[offs++] = 0.0;
+        // u_Scroll (1)
+        d[offs++] = 0.0;
     }
 }
 

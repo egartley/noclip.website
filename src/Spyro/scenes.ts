@@ -10,11 +10,12 @@ import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } fr
 import { Checkbox, COOL_BLUE_COLOR, Panel, RENDER_HACKS_ICON } from "../ui.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { CameraController } from "../Camera.js";
-import { buildSpyroTextures } from "./texture.js";
+import { buildSpyroRawTextures } from "./texture.js";
 
 /*
 TODO
 
+Fix S2 title screen hexpat
 Some moby instances aren't detected for regular levels when they should be
 More thoroughly check texture rotation permutations, SWV has some of them wrong. Annoying to check since they're so rare
 Fix or redo water detection. There's some false positives, see the ice in S3 Icy Peak for an example
@@ -57,14 +58,14 @@ class Renderer implements SceneGfx {
     private skyboxRenderer: SpyroSkyboxRenderer;
     private clearColor: number[];
 
-    constructor(device: GfxDevice, level: SpyroLevel, skybox: SpyroSkybox, private mobyInstances: SpyroMobyInstance[]) {
+    constructor(device: GfxDevice, level: SpyroLevel, skybox: SpyroSkybox, mobyInstances: SpyroMobyInstance[]) {
         this.renderHelper = new GfxRenderHelper(device);
-        this.levelRenderer = new SpyroLevelRenderer(this.renderHelper.renderCache, level, this.mobyInstances);
+        this.levelRenderer = new SpyroLevelRenderer(this.renderHelper.renderCache, level, mobyInstances);
         this.skyboxRenderer = new SpyroSkyboxRenderer(this.renderHelper.renderCache, skybox);
         this.clearColor = skybox.backgroundColor.map(c => c / 255);
         const viewerTextures = [];
-        for (const t of this.levelRenderer.gfxTextures) {
-            viewerTextures.push({ gfxTexture: t });
+        for (const t of this.levelRenderer.textures) {
+            viewerTextures.push({ gfxTexture: t.gfxTexture });
         }
         this.textureHolder = new FakeTextureHolder(viewerTextures);
     }
@@ -120,7 +121,7 @@ class Renderer implements SceneGfx {
             this.levelRenderer.showTextures = toggleTextures.checked
         };
         panel.contents.appendChild(toggleTextures.elem);
-        if (this.mobyInstances.length > 0) {
+        if (this.levelRenderer.mobyInstances.length > 0) {
             const showMobysCheckbox = new Checkbox("Show Moby Positions (Debug)", false);
             showMobysCheckbox.onchanged = () => {
                 this.levelRenderer.showMobys = showMobysCheckbox.checked
@@ -156,7 +157,7 @@ class S1Level implements SceneDesc {
         const levelFile = await context.dataFetcher.fetchData(`${pathBase}/sf${this.subfileID}.bin`);
         const levelData = parseSpyroLevelData(levelFile, this.subfileID >= 11 && this.subfileID <= 79);
         const mobys = parseSpyroMobyInstances(levelData.mobyInstances);
-        const textures = buildSpyroTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber);
+        const textures = buildSpyroRawTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber);
         const level = buildSpyroLevel(levelData.ground.createDataView(), textures, this.gameNumber, this.subfileID);
         const skybox = buildSpyroSkybox(levelData.sky.createDataView(), this.gameNumber);
         return new Renderer(device, level, skybox, mobys);
@@ -178,7 +179,7 @@ class S2Level implements SceneDesc {
         const levelData = parseSpyroLevelData2(levelFile, this.gameNumber, 0, this.subfileID >= 188);
         levelData.vram.applyFontStripFix();
         const mobys = parseSpyroMobyInstances(levelData.mobyInstances);
-        const textures = buildSpyroTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber);
+        const textures = buildSpyroRawTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber);
         const level = buildSpyroLevel(levelData.ground.createDataView(), textures, this.gameNumber, this.subfileID);
         const skybox = buildSpyroSkybox(levelData.sky.createDataView(), this.gameNumber);
         return new Renderer(device, level, skybox, mobys);
@@ -202,7 +203,7 @@ class S3Level implements SceneDesc {
         const levelFile = await context.dataFetcher.fetchData(`${pathBase3}/sf${this.subfileID}.bin`);
         const levelData = parseSpyroLevelData2(levelFile, this.gameNumber, this.sublevelID, this.subfileID >= 184);
         const mobys = parseSpyroMobyInstances(levelData.mobyInstances);
-        const textures = buildSpyroTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber, this.subfileID);
+        const textures = buildSpyroRawTextures(levelData.vram, levelData.textureTable.createDataView(), this.gameNumber, this.subfileID);
         const level = buildSpyroLevel(levelData.ground.createDataView(), textures, this.gameNumber, this.subfileID);
         const skybox = buildSpyroSkybox(levelData.sky.createDataView(), this.gameNumber);
         return new Renderer(device, level, skybox, mobys);

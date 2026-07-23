@@ -1,12 +1,33 @@
 import { vec2, vec4 } from "gl-matrix";
 import { parseSpyroTextureTable, SpyroTextureHeader, SpyroVRAM } from "./bin";
+import { GfxDevice, GfxTextureUsage, GfxTextureDimension } from "../gfx/platform/GfxPlatform";
+import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
+import { GfxTexture } from "../gfx/platform/GfxPlatformImpl";
 
-export interface SpyroTextures {
+export interface SpyroRawTextures {
     colors: Uint8Array[][];
     headers: SpyroTextureHeader[];
 }
 
-export class SpyroTileDefinition {
+export class SpyroTexture {
+    public gfxTexture: GfxTexture;
+
+    constructor(device: GfxDevice, rgba: Uint8Array[], header: SpyroTextureHeader, i: number, public isScrolling: boolean) {
+        const s = header.cor === undefined ? 32 : 64;
+        this.gfxTexture = device.createTexture({
+            width: s, height: s,
+            numLevels: s / 32,
+            pixelFormat: GfxFormat.U8_RGBA_NORM,
+            usage: GfxTextureUsage.Sampled,
+            dimension: GfxTextureDimension.n2D,
+            depthOrArrayLayers: 1
+        });
+        device.setResourceName(this.gfxTexture, `tile_${i}`);
+        device.uploadTextureData(this.gfxTexture, 0, rgba);
+    }
+}
+
+export class SpyroTextureDefinition {
     baseX: number;
     baseY: number;
     packedPageCoords: vec2;
@@ -35,8 +56,8 @@ export class SpyroTileDefinition {
     }
 }
 
-// temp manual workaround for cor tiles in s3 sublevels with "missing" vram data
-const S3_SUBLEVEL_INVALID_COR_TILES: Map<number, number[]> = new Map([
+// temp manual workaround for cor textures in s3 sublevels with "missing" vram data
+const S3_SUBLEVEL_INVALID_COR_TEXTURES: Map<number, number[]> = new Map([
     [122, [3, 4, 5, 6, 77, 78]],
     [124, [10, 15, 16, 67]],
     [140, [36, 60, 71, 78]],
@@ -44,13 +65,13 @@ const S3_SUBLEVEL_INVALID_COR_TILES: Map<number, number[]> = new Map([
     [170, [1, 21, 22, 65]]
 ]);
 
-export function buildSpyroTextures(vram: SpyroVRAM, textureTable: DataView, gameNumber: number, levelId: number = -1): SpyroTextures {
+export function buildSpyroRawTextures(vram: SpyroVRAM, textureTable: DataView, gameNumber: number, levelId: number = -1): SpyroRawTextures {
     const headers = parseSpyroTextureTable(textureTable, gameNumber);
     const colors: Uint8Array[][] = Array(headers.length);
     for (let i = 0; i < headers.length; i++) {
         let doCOR = true;
-        if (gameNumber === 3 && S3_SUBLEVEL_INVALID_COR_TILES.has(levelId)) {
-            doCOR = !S3_SUBLEVEL_INVALID_COR_TILES.get(levelId)!.includes(i);
+        if (gameNumber === 3 && S3_SUBLEVEL_INVALID_COR_TEXTURES.has(levelId)) {
+            doCOR = !S3_SUBLEVEL_INVALID_COR_TEXTURES.get(levelId)!.includes(i);
         }
         colors[i] = [];
         if (doCOR) {
@@ -71,56 +92,56 @@ export function buildSpyroTextures(vram: SpyroVRAM, textureTable: DataView, game
     return { colors, headers };
 }
 
-export function buildSpyroTile(data: DataView, offset: number, gameNumber: number): SpyroTileDefinition {
-    const tile = new SpyroTileDefinition(data, offset);
+export function buildSpyroTextureDefinition(data: DataView, offset: number, gameNumber: number): SpyroTextureDefinition {
+    const tex = new SpyroTextureDefinition(data, offset);
     if (gameNumber === 1) {
-        if ((tile.flags2 & 128) > 0) {
-            tile.size = 32;
+        if ((tex.flags2 & 128) > 0) {
+            tex.size = 32;
         } else {
-            tile.size = 16;
+            tex.size = 16;
         }
     }
-    if ((tile.flags2 & 1) > 0) {
-        tile.bitDepth = 15;
-    } else if ((tile.flags1 & 128) > 0) {
-        tile.bitDepth = 8;
+    if ((tex.flags2 & 1) > 0) {
+        tex.bitDepth = 15;
+    } else if ((tex.flags1 & 128) > 0) {
+        tex.bitDepth = 8;
     } else {
-        tile.bitDepth = 4;
+        tex.bitDepth = 4;
     }
-    tile.shift = tile.flags1 & 7;
-    switch (tile.bitDepth) {
+    tex.shift = tex.flags1 & 7;
+    switch (tex.bitDepth) {
         case 4:
-            tile.shift *= 256;
+            tex.shift *= 256;
             break;
         case 8:
-            tile.shift *= 128;
+            tex.shift *= 128;
             break;
         case 15:
-            tile.shift *= 64;
+            tex.shift *= 64;
             break;
     }
-    tile.x[3] = tile.baseX + tile.shift;
-    tile.x[2] = tile.xx + tile.shift;
-    tile.x[0] = tile.x[3];
-    tile.x[1] = tile.x[3] + tile.size;
-    tile.y[3] = tile.baseY;
-    if ((tile.flags1 & 16) > 0) {
-        tile.y[3] += 256;
+    tex.x[3] = tex.baseX + tex.shift;
+    tex.x[2] = tex.xx + tex.shift;
+    tex.x[0] = tex.x[3];
+    tex.x[1] = tex.x[3] + tex.size;
+    tex.y[3] = tex.baseY;
+    if ((tex.flags1 & 16) > 0) {
+        tex.y[3] += 256;
     }
-    tile.y[2] = tile.y[3];
-    tile.y[0] = tile.y[3] + tile.size;
-    tile.y[1] = tile.y[3] + tile.size;
-    tile.pageX = (tile.packedPageCoords[0] & 31) * 16;
-    tile.pageY = (tile.packedPageCoords[0] >> 6) | (tile.packedPageCoords[1] << 2);
-    tile.rotation = ((tile.flags2 & 127) >> 4) & 7;
+    tex.y[2] = tex.y[3];
+    tex.y[0] = tex.y[3] + tex.size;
+    tex.y[1] = tex.y[3] + tex.size;
+    tex.pageX = (tex.packedPageCoords[0] & 31) * 16;
+    tex.pageY = (tex.packedPageCoords[0] >> 6) | (tex.packedPageCoords[1] << 2);
+    tex.rotation = ((tex.flags2 & 127) >> 4) & 7;
     if (gameNumber > 1) {
-        if ((tile.flags2 & 128) > 0) {
-            tile.transparent = 1 + ((tile.flags1 & 127) >> 5);
+        if ((tex.flags2 & 128) > 0) {
+            tex.transparent = 1 + ((tex.flags1 & 127) >> 5);
         } else {
-            tile.transparent = 0;
+            tex.transparent = 0;
         }
     }
-    return tile;
+    return tex;
 }
 
 function turn(src: Uint8Array, size: number): Uint8Array {
@@ -168,10 +189,10 @@ function flip(src: Uint8Array, size: number): Uint8Array {
     return dest;
 }
 
-function applyTileRotationRGBA(rgba: Uint8Array, tile: SpyroTileDefinition, size: number, gameNumber: number): Uint8Array {
+function applyTileRotationRGBA(rgba: Uint8Array, tex: SpyroTextureDefinition, size: number, gameNumber: number): Uint8Array {
     let rotatedRGBA = rgba;
 
-    switch (tile.rotation) {
+    switch (tex.rotation) {
         case 1:
             rotatedRGBA = mirror(flip(turn(rotatedRGBA, size), size), size);
             break;
@@ -225,12 +246,12 @@ function getCLUT(vram: SpyroVRAM, px: number, py: number, n: number): [number, n
     return clut;
 }
 
-function decodeTileToRGBA(vram: SpyroVRAM, tile: SpyroTileDefinition, width: number = tile.size, height: number = tile.size): Uint8Array {
-    let startX = tile.x[3];
-    const startY = tile.y[3];
-    if (tile.bitDepth === 4) {
+function decodeTileToRGBA(vram: SpyroVRAM, tex: SpyroTextureDefinition, width: number = tex.size, height: number = tex.size): Uint8Array {
+    let startX = tex.x[3];
+    const startY = tex.y[3];
+    if (tex.bitDepth === 4) {
         startX = startX >> 2;
-        const clut = getCLUT(vram, tile.pageX, tile.pageY, 16);
+        const clut = getCLUT(vram, tex.pageX, tex.pageY, 16);
         const rgba = new Uint8Array(width * height * 4);
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width / 4; x++) {
@@ -246,9 +267,9 @@ function decodeTileToRGBA(vram: SpyroVRAM, tile: SpyroTileDefinition, width: num
             }
         }
         return rgba;
-    } else if (tile.bitDepth === 8) {
+    } else if (tex.bitDepth === 8) {
         startX = startX >> 1;
-        const clut = getCLUT(vram, tile.pageX, tile.pageY, 256);
+        const clut = getCLUT(vram, tex.pageX, tex.pageY, 256);
         const rgba = new Uint8Array(width * height * 4);
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width / 2; x++) {
@@ -276,7 +297,7 @@ function decodeTileToRGBA(vram: SpyroVRAM, tile: SpyroTileDefinition, width: num
         const rgba = new Uint8Array(width * height * 4);
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
-                const word = vram.getWord(tile.x[3] + x, startY + y);
+                const word = vram.getWord(tex.x[3] + x, startY + y);
                 const [r, g, b, a] = colorBitsToRGBA(word);
                 const dst = (y * width + x) * 4;
                 rgba[dst + 0] = r;

@@ -1,13 +1,13 @@
 import { vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert } from "../util";
-import { buildSpyroTile, SpyroTextures, SpyroTileDefinition } from "./texture";
+import { buildSpyroTextureDefinition, SpyroRawTextures, SpyroTextureDefinition } from "./texture";
 
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
 // Further enhancements, additions and fixes are wholly original
 
 export interface SpyroLevel {
-    textures: SpyroTextures;
+    textures: SpyroRawTextures;
     gameNumber: number;
     id: number;
     parts: SpyroGroundPart[];
@@ -38,8 +38,8 @@ export interface SpyroLevelData {
 }
 
 export interface SpyroTextureHeader {
-    mid: SpyroTileDefinition,
-    cor?: SpyroTileDefinition[]
+    mid: SpyroTextureDefinition,
+    cor?: SpyroTextureDefinition[]
 }
 
 export interface SpyroSkybox {
@@ -385,7 +385,7 @@ export function buildSpyroSkybox(data: DataView, gameNumber: number): SpyroSkybo
     return { backgroundColor, parts };
 }
 
-export function buildSpyroLevel(data: DataView, textures: SpyroTextures, gameNumber: number, id: number): SpyroLevel {
+export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, gameNumber: number, id: number): SpyroLevel {
     let partCount = data.getUint32(0, true);
     let offset = 4;
     const partOffsets: number[] = [];
@@ -649,7 +649,7 @@ export function parseSpyroTextureTable(data: DataView, gameNumber: number): Spyr
         // starts with lod-mid header pairs
         for (let i = 0; i < count; i++) {
             offset += 8; // skip lod header
-            const mid = buildSpyroTile(data, offset, gameNumber);
+            const mid = buildSpyroTextureDefinition(data, offset, gameNumber);
             offset += 8;
             headers[i] = { mid, cor: [] };
         }
@@ -657,9 +657,9 @@ export function parseSpyroTextureTable(data: DataView, gameNumber: number): Spyr
         offset = 4 + (16 * count);
         for (let i = 0; i < count; i++) {
             offset += 8; // skip spr header
-            const cor: SpyroTileDefinition[] = Array(4);
+            const cor: SpyroTextureDefinition[] = Array(4);
             for (let j = 0; j < 4; j++) {
-                cor[j] = buildSpyroTile(data, offset, gameNumber);
+                cor[j] = buildSpyroTextureDefinition(data, offset, gameNumber);
                 offset += 8;
             }
             offset += 8 * 16; // skip sm headers
@@ -669,11 +669,11 @@ export function parseSpyroTextureTable(data: DataView, gameNumber: number): Spyr
         // sequential headers of lod-mid-cor
         for (let i = 0; i < count; i++) {
             offset += 8; // skip lod
-            const mid = buildSpyroTile(data, offset, gameNumber);
+            const mid = buildSpyroTextureDefinition(data, offset, gameNumber);
             offset += 8;
-            const cor: SpyroTileDefinition[] = Array(4);
+            const cor: SpyroTextureDefinition[] = Array(4);
             for (let j = 0; j < 4; j++) {
-                cor[j] = buildSpyroTile(data, offset, gameNumber);
+                cor[j] = buildSpyroTextureDefinition(data, offset, gameNumber);
                 offset += 8;
             }
             headers[i] = { mid, cor };
