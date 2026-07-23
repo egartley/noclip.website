@@ -1,7 +1,7 @@
 import { mat4, ReadonlyMat4, vec3 } from "gl-matrix";
 import { defaultMegaState, makeMegaState } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor, GfxSamplerBinding } from "../gfx/platform/GfxPlatform";
 import { GfxInputLayout, GfxProgram } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -13,7 +13,7 @@ import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { colorNewFromRGBA, White } from "../Color";
 import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
 import { Destroyable } from "../SceneBase";
-import { computeViewMatrixSkybox } from "../Camera";
+import { computeViewMatrixSkybox, computeViewSpaceDepthFromWorldSpaceAABB } from "../Camera";
 import { AABB } from "../Geometry";
 import { SpyroTexture } from "./texture";
 import { GfxRenderInst } from "../gfx/render/GfxRenderInstManager";
@@ -28,30 +28,40 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_Clip;
+    Mat3x4 u_View;
+    Mat4x4 u_ViewProj;
     float u_Time;
-    float u_ApplyTextures;
+    float u_MIDNear;
+    float u_MIDFar;
 };
 
 layout(std140) uniform ub_DrawParams {
+    float u_ApplyTextures;
+    float u_UseMIDColor;
     float u_Brightness;
-    float u_IsWater;
     float u_Scroll;
 };
 
 uniform sampler2D u_Texture;
 
 varying vec3 v_Color;
+varying vec3 v_MIDColor;
 varying vec2 v_UV;
+// varying float v_Depth;
 
 #ifdef VERT
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec3 a_Color;
-layout(location = 2) in vec2 a_UV;
+layout(location = 2) in vec3 a_MIDColor;
+layout(location = 3) in vec2 a_UV;
 
 void main() {
     // vec3 pos = a_Position;
     v_Color = a_Color;
+    if (u_UseMIDColor > 0.1) {
+        v_Color = a_MIDColor;
+        // v_Depth = -(UnpackMatrix(u_View) * vec4(a_Position, 1.0)).z;
+    }
     v_UV = a_UV;
 
     // if (u_IsWater > 0.1) {
@@ -62,24 +72,22 @@ void main() {
     //     pos.z += wave * 1.1;
     // }
 
-    gl_Position = UnpackMatrix(u_Clip) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
 }
 #endif
 
 #ifdef FRAG
 void main() {
-    if (u_ApplyTextures < 1.0) {
+    if (u_ApplyTextures < 1.0 || u_UseMIDColor > 0.1) {
         gl_FragColor = vec4(v_Color, 1.0);
-        return;
+    } else {
+        vec2 uv = v_UV;
+        if (u_Scroll > 0.1) {
+            uv.y = fract(uv.y - u_Time * 0.45);
+        }
+        vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
+        gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
     }
-
-    vec2 uv = v_UV;
-    if (u_Scroll > 0.1) {
-        uv.y = fract(uv.y - u_Time * 0.45);
-    }
-    vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
-
-    gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
 }
 #endif
     `;
@@ -103,7 +111,7 @@ const NOCLIP_SPACE_CORRECTION = mat4.fromValues(
     0, 0, 0, 1,
 );
 const SCRATCH_CLIP = mat4.create();
-const SCRATCH_SKY_VIEW = mat4.create();
+const SCRATCH_VIEW = mat4.create();
 const SCRATCH_MOBY_POS = vec3.create();
 const SCRATCH_MOBY_ROT = vec3.create();
 const TILE_SCROLL_MAP: Record<number, Record<number, number[]>> = {
@@ -181,9 +189,12 @@ function inView(bbox: number[], m: ReadonlyMat4) {
 export class SpyroLevelRenderer {
     public showMobys: boolean = false;
     public showTextures: boolean = true;
+    public applyLOD: boolean = false;
     public useLOD: boolean = false;
     public hasLOD: boolean = false;
     public textures: SpyroTexture[];
+    public lodThrehold = 2000.0;
+    public midThresold = 1500.0;
     private gfxProgram: GfxProgram;
     private gfxSamplerBindings: GfxSamplerBinding[][];
     private inputLayout: GfxInputLayout;
@@ -211,9 +222,11 @@ export class SpyroLevelRenderer {
             vertexAttributeDescriptors: [
                 { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
                 { location: 1, bufferIndex: 1, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
-                { location: 2, bufferIndex: 2, format: GfxFormat.F32_RG, bufferByteOffset: 0 }
+                { location: 2, bufferIndex: 2, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
+                { location: 3, bufferIndex: 3, format: GfxFormat.F32_RG, bufferByteOffset: 0 }
             ],
             vertexBufferDescriptors: [
+                { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex },
                 { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex },
                 { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex },
                 { byteStride: 8, frequency: GfxVertexBufferFrequency.PerVertex }
@@ -247,18 +260,26 @@ export class SpyroLevelRenderer {
         template.setBindingLayouts(BINDING_LAYOUTS);
         template.setUniformBuffer(renderHelper.uniformBuffer);
 
-        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 18);
+        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 31);
         const d = template.mapUniformBufferF32(Shader.ub_SceneParams);
-        // u_Clip (16)
+        // u_View (12)
+        mat4.mul(SCRATCH_CLIP, viewerInput.camera.viewMatrix, NOCLIP_SPACE_CORRECTION);
+        offs += fillMatrix4x3(d, offs, SCRATCH_CLIP);
+        // u_ViewProj (16)
         mat4.mul(SCRATCH_CLIP, viewerInput.camera.clipFromWorldMatrix, NOCLIP_SPACE_CORRECTION);
         offs += fillMatrix4x4(d, offs, SCRATCH_CLIP);
         // u_Time (1)
         d[offs++] = viewerInput.time * this.scrollSpeed;
-        // u_ApplyTextures (1)
-        d[offs++] = !this.useLOD && this.showTextures ? 1.0 : 0.0;
+        // u_MIDNear (1)
+        d[offs++] = this.midThresold;
+        // u_MIDFar (1)
+        d[offs++] = this.lodThrehold;
 
+        const c = vec3.fromValues(viewerInput.camera.worldMatrix[12], viewerInput.camera.worldMatrix[13], viewerInput.camera.worldMatrix[14]);
+        const l = this.applyLOD ? this.lodThrehold : Infinity;
+        const m = this.applyLOD ? this.midThresold : Infinity;
         for (const part of this.parts) {
-            part.prepareToRender(renderHelper, viewerInput, this.gfxSamplerBindings, this.useLOD);
+            part.prepareToRender(renderHelper, viewerInput, this.gfxSamplerBindings, c, l, m);
         }
 
         if (this.showMobys) {
@@ -320,10 +341,12 @@ class PartRenderer {
     private bboxPoints: number[];
     private bboxLOD: AABB;
     private bboxPointsLOD: number[];
+    private centerPoint: vec3;
 
     constructor(cache: GfxRenderCache, part: SpyroGroundPart, private inputLayout: GfxInputLayout) {
         const vertices: number[] = [];
         const colors: number[] = [];
+        const midColors: number[] = [];
         const uvs: number[] = [];
         const indices: number[] = [];
 
@@ -341,8 +364,10 @@ class PartRenderer {
             for (let i = 0; i < 3; i++) {
                 const v = part.vlut[polygon.vertices[i]];
                 const c = part.clut[polygon.colors[i]].map(c => c / 255);
+                const mc = part.clutMID[polygon.colors[i]].map(c => c / 255);
                 vertices.push(v[0], v[1], v[2]);
                 colors.push(c[0], c[1], c[2]);
+                midColors.push(mc[0], mc[1], mc[2]);
                 uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
                 callIndices.push(polygon.textureIndex);
             }
@@ -373,6 +398,7 @@ class PartRenderer {
                 const c = part.clutLOD[polygon.colors[i]].map(c => c / 255);
                 vertices.push(v[0], v[1], v[2]);
                 colors.push(c[0], c[1], c[2]);
+                midColors.push(1, 1, 1); // shouldn't ever be visible, but pad to keep alignment
                 uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
                 indices.push(index++);
             }
@@ -381,35 +407,38 @@ class PartRenderer {
         this.bboxPointsLOD = getBboxPoints(this.bboxLOD);
         this.drawCountLOD = indices.length - this.indexLODOffset;
         this.hasLOD = this.drawCountLOD > 0;
+        this.centerPoint = vec3.create();
+        (this.hasMDL ? this.bbox : this.bboxLOD).centerPoint(this.centerPoint);
 
         this.vertexBufferDescriptors = [
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors).buffer), byteOffset: 0 },
+            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(midColors).buffer), byteOffset: 0 },
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(uvs).buffer), byteOffset: 0 }
         ];
         this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
     }
 
-    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, gfxSamplerBindings: GfxSamplerBinding[][], useLOD: boolean) {
-        const lod = this.hasLOD && useLOD;
-        const dc = lod ? this.drawCountLOD : this.drawCount;
-        if (dc > 0 && inView(lod ? this.bboxPointsLOD : this.bboxPoints, viewerInput.camera.clipFromWorldMatrix)) {
+    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, gfxSamplerBindings: GfxSamplerBinding[][], cameraPos: vec3, lodThrehold: number, midThresold: number) {
+        const depth = vec3.distance(cameraPos, this.centerPoint);
+        const lod = lodThrehold < Infinity ? (!this.hasMDL && this.hasLOD ? true : depth >= lodThrehold) : false;
+        const mid = this.hasMDL ? depth >= midThresold && depth < lodThrehold : false;
+        const visible = (lod ? this.drawCountLOD : this.drawCount) > 0 && inView(lod ? this.bboxPointsLOD : this.bboxPoints, viewerInput.camera.clipFromWorldMatrix);
+        if (visible) {
             const template = renderHelper.renderInstManager.pushTemplate();
             template.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
-            this.fillDrawParams(template);
+            this.fillDrawParams(template, !lod, mid);
 
             if (lod) {
                 const renderInst = renderHelper.renderInstManager.newRenderInst();
 
-                // this.fillDrawParams(renderInst);
-                renderInst.setDrawCount(dc, this.indexLODOffset);
+                renderInst.setDrawCount(this.drawCountLOD, this.indexLODOffset);
 
                 renderHelper.renderInstManager.submitRenderInst(renderInst);
             } else {
                 for (const drawCall of this.drawCalls) {
                     const renderInst = renderHelper.renderInstManager.newRenderInst();
 
-                    // this.fillDrawParams(renderInst);
                     renderInst.setSamplerBindingsFromTextureMappings(gfxSamplerBindings[drawCall.texture]);
                     renderInst.setDrawCount(drawCall.count, drawCall.offset);
 
@@ -428,13 +457,15 @@ class PartRenderer {
         }
     }
 
-    private fillDrawParams(renderInst: GfxRenderInst) {
-        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 3);
+    private fillDrawParams(renderInst: GfxRenderInst, applyTextures: boolean, useMIDColor: boolean) {
+        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 4);
         const d = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
+        // u_ApplyTextures (1)
+        d[offs++] = applyTextures ? 1.0 : 0.0;
+        // u_UseMIDColor (1)
+        d[offs++] = useMIDColor ? 1.0 : 0.0;
         // u_Brightness (1)
         d[offs++] = BRIGHTNESS_OPAQUE;
-        // u_IsWater (1)
-        d[offs++] = 0.0;
         // u_Scroll (1)
         d[offs++] = 0.0;
     }
@@ -449,7 +480,7 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_Clip;
+    Mat4x4 u_ViewProj;
 };
 
 varying vec3 v_Color;
@@ -460,7 +491,7 @@ layout(location = 1) in vec3 a_Color;
 
 void main() {
     v_Color = a_Color;
-    gl_Position = UnpackMatrix(u_Clip) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
 }
 #endif
 
@@ -535,11 +566,11 @@ export class SpyroSkyboxRenderer implements Destroyable {
 
         let offs = renderInst.allocateUniformBuffer(SkyboxShader.ub_SceneParams, 16);
         const d = renderInst.mapUniformBufferF32(SkyboxShader.ub_SceneParams);
-        // u_Clip (16)
-        computeViewMatrixSkybox(SCRATCH_SKY_VIEW, viewerInput.camera);
-        mat4.mul(SCRATCH_CLIP, viewerInput.camera.projectionMatrix, SCRATCH_SKY_VIEW);
-        mat4.mul(SCRATCH_CLIP, SCRATCH_CLIP, NOCLIP_SPACE_CORRECTION);
-        offs += fillMatrix4x4(d, offs, SCRATCH_CLIP);
+        // u_ViewProj (16)
+        computeViewMatrixSkybox(SCRATCH_VIEW, viewerInput.camera);
+        mat4.mul(SCRATCH_VIEW, viewerInput.camera.projectionMatrix, SCRATCH_VIEW);
+        mat4.mul(SCRATCH_VIEW, SCRATCH_VIEW, NOCLIP_SPACE_CORRECTION);
+        offs += fillMatrix4x4(d, offs, SCRATCH_VIEW);
 
         renderInst.setVertexInput(this.gfxInputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
         renderInst.setDrawCount(this.drawCount);

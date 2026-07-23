@@ -7,7 +7,7 @@ import { SpyroLevelRenderer, SpyroSkyboxRenderer } from "./render.js"
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
-import { Checkbox, COOL_BLUE_COLOR, Panel, RENDER_HACKS_ICON } from "../ui.js";
+import { Checkbox, COOL_BLUE_COLOR, Panel, RENDER_HACKS_ICON, Slider } from "../ui.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { CameraController } from "../Camera.js";
 import { buildSpyroRawTextures } from "./texture.js";
@@ -15,7 +15,6 @@ import { buildSpyroRawTextures } from "./texture.js";
 /*
 TODO
 
-Fix S2 title screen hexpat
 Some moby instances aren't detected for regular levels when they should be
 More thoroughly check texture rotation permutations, SWV has some of them wrong. Annoying to check since they're so rare
 Fix or redo water detection. There's some false positives, see the ice in S3 Icy Peak for an example
@@ -109,25 +108,45 @@ class Renderer implements SceneGfx {
         const panel = new Panel();
         panel.customHeaderBackgroundColor = COOL_BLUE_COLOR;
         panel.setTitle(RENDER_HACKS_ICON, "Render Hacks");
-        if (this.levelRenderer.hasLOD) {
-            const toggleLOD = new Checkbox("Use LOD Polygons", false);
-            toggleLOD.onchanged = () => {
-                this.levelRenderer.useLOD = toggleLOD.checked
-            };
-            panel.contents.appendChild(toggleLOD.elem);
-        }
-        const toggleTextures = new Checkbox("Enable Textures", true);
-        toggleTextures.onchanged = () => {
-            this.levelRenderer.showTextures = toggleTextures.checked
-        };
-        panel.contents.appendChild(toggleTextures.elem);
+
         if (this.levelRenderer.mobyInstances.length > 0) {
-            const showMobysCheckbox = new Checkbox("Show Moby Positions (Debug)", false);
+            const showMobysCheckbox = new Checkbox("Show Moby Positions", this.levelRenderer.showMobys);
             showMobysCheckbox.onchanged = () => {
                 this.levelRenderer.showMobys = showMobysCheckbox.checked
             };
             panel.contents.appendChild(showMobysCheckbox.elem);
         }
+
+        const applyLOD = new Checkbox("Apply LOD Rendering", this.levelRenderer.applyLOD);
+        applyLOD.onchanged = () => {
+            this.levelRenderer.applyLOD = applyLOD.checked
+        };
+        panel.contents.appendChild(applyLOD.elem);
+        const lodSlider = new Slider();
+        lodSlider.setRange(0, 5000);
+        lodSlider.setLabel("LOD Threshold");
+        lodSlider.setValue(this.levelRenderer.lodThrehold);
+        lodSlider.onvalue = () => {
+            this.levelRenderer.lodThrehold = lodSlider.getValue();
+            if (this.levelRenderer.lodThrehold < this.levelRenderer.midThresold) {
+                this.levelRenderer.midThresold = this.levelRenderer.lodThrehold - 1;
+                midSlider.setValue(this.levelRenderer.midThresold);
+            }
+        };
+        panel.contents.appendChild(lodSlider.elem);
+        const midSlider = new Slider();
+        midSlider.setRange(0, 5000);
+        midSlider.setLabel("MID Threshold");
+        midSlider.setValue(this.levelRenderer.midThresold);
+        midSlider.onvalue = () => {
+            this.levelRenderer.midThresold = midSlider.getValue();
+            if (this.levelRenderer.lodThrehold < this.levelRenderer.midThresold) {
+                this.levelRenderer.lodThrehold = this.levelRenderer.midThresold + 1;
+                lodSlider.setValue(this.levelRenderer.lodThrehold);
+            }
+        };
+        panel.contents.appendChild(midSlider.elem);
+
         return [panel];
     }
 

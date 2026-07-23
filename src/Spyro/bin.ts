@@ -16,6 +16,7 @@ export interface SpyroLevel {
 export interface SpyroGroundPart {
     vlut: number[][];
     clut: number[][];
+    clutMID: number[][];
     vlutLOD: number[][];
     clutLOD: number[][];
     polygons: GroundPolygon[];
@@ -401,13 +402,6 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
 
     const parts: SpyroGroundPart[] = [];
     for (let i = 0; i < partCount; i++) {
-        const vlut: number[][] = [];
-        const clut: number[][] = [];
-        const vlutLOD: number[][] = [];
-        const clutLOD: number[][] = [];
-        const polygons: GroundPolygon[] = [];
-        const polygonsLOD: GroundPolygon[] = [];
-
         offset = partOffsets[i];
 
         // header (28)
@@ -416,6 +410,7 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
         offset += 20;
 
         // LOD vertices (4)
+        const vlutLOD = Array(header.lodVertexCount);
         for (let j = 0; j < header.lodVertexCount; j++) {
             const byte1 = data.getUint8(offset);
             const byte2 = data.getUint8(offset + 1);
@@ -430,19 +425,21 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
             }
             const y = ((byte2 >> 2) | ((byte3 & 31) << 6)) + header.y;
             const x = ((byte3 >> 5) | (byte4 << 3)) + header.x;
-            vlutLOD.push([x, y, z]);
+            vlutLOD[j] = [x, y, z];
         }
 
         // LOD colors (4)
+        const clutLOD = Array(header.lodColorCount);
         for (let j = 0; j < header.lodColorCount; j++) {
             const r = data.getUint8(offset);
             const g = data.getUint8(offset + 1);
             const b = data.getUint8(offset + 2);
             offset += 4;
-            clutLOD.push([r, g, b]);
+            clutLOD[j] = [r, g, b];
         }
 
         // LOD polys (8)
+        const polygonsLOD: GroundPolygon[] = [];
         for (let j = 0; j < header.lodPolyCount; j++) {
             let vertexIndices;
             let colorIndices;
@@ -523,6 +520,7 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
         }
 
         // MDL vertices (4)
+        const vlut = Array(header.mdlVertexCount);
         for (let j = 0; j < header.mdlVertexCount; j++) {
             const byte1 = data.getUint8(offset);
             const byte2 = data.getUint8(offset + 1);
@@ -541,23 +539,31 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
             }
             const y = ((byte2 >> 2) | ((byte3 & 31) << 6)) + header.y;
             const x = ((byte3 >> 5) | (byte4 << 3)) + header.x;
-            vlut.push([x, y, z]);
+            vlut[j] = [x, y, z];
         }
 
         // MDL colors (4)
+        const clut = Array(header.mdlColorCount);
         for (let j = 0; j < header.mdlColorCount; j++) {
             const r = data.getUint8(offset);
             const g = data.getUint8(offset + 1);
             const b = data.getUint8(offset + 2);
             offset += 4;
-            clut.push([r, g, b]);
+            clut[j] = [r, g, b];
         }
 
         // MID colors (4)
-        // these are used in the game when blending between MDL and LOD, unused for now
-        offset += header.mdlColorCount * 4;
+        const clutMID = Array(header.mdlColorCount);
+        for (let j = 0; j < header.mdlColorCount; j++) {
+            const r = data.getUint8(offset);
+            const g = data.getUint8(offset + 1);
+            const b = data.getUint8(offset + 2);
+            offset += 4;
+            clutMID[j] = [r, g, b];
+        }
 
         // MDL polys (16)
+        const polygons: GroundPolygon[] = [];
         for (let j = 0; j < header.mdlPolyCount; j++) {
             let v = vec4.fromValues(data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3));
             let c = vec4.fromValues(data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7));
@@ -635,7 +641,7 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
             }
         }
 
-        parts[i] = { vlut, clut, vlutLOD, clutLOD, polygons, polygonsLOD };
+        parts[i] = { vlut, clut, clutMID, vlutLOD, clutLOD, polygons, polygonsLOD };
     }
 
     return { textures, gameNumber, id, parts };
@@ -847,7 +853,18 @@ export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number,
     if (gameNumber === 2 || (gameNumber === 3 && levelNumber === 0)) {
         const subfile4 = new Parser(file.getSubfile(3));
         if (!isFlyover) {
-            subfile4.skip(gameNumber === 2 ? 44 : 48); // some sort of header
+            // some sort of header
+            if (gameNumber === 3) {
+                subfile4.skip(48);
+            } else {
+                // weird fix for s2 title screen
+                const unk = subfile4.getUint8();
+                if (unk > 0) {
+                    subfile4.skip(43);
+                } else {
+                    subfile4.skip(19);
+                }
+            }
             subfile4.skipSection();
             subfile4.skipSection();
             subfile4.skipSection();
