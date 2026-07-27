@@ -116,6 +116,7 @@ import * as Scenes_RatchetAndClank from './RatchetAndClank/scenes.js';
 import * as Scenes_RagnarokOnline from './RagnarokOnline/scenes.js';
 import * as Scenes_PaperMarioTheOrigamiKing from './PaperMarioTheOrigamiKing/scenes.js';
 import * as Scenes_NarutoGNT4 from './NarutoGNT4/scenes.js'
+import * as Scenes_SpyroAHT from './SpyroAHerosTail/scenes.js'
 
 import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_FileDrops.js';
 
@@ -144,7 +145,7 @@ import ArrayBufferSlice from './ArrayBufferSlice.js';
 
 const sceneGroups: (string | SceneGroup)[] = [
     "Development",
-    Scenes_Example.sceneGroup,
+    Scenes_SpyroAHT.sceneGroup,
     "Wii",
     Scenes_MarioKartWii.sceneGroup,
     Scenes_KirbysReturnToDreamLand.sceneGroup,
