@@ -43,9 +43,9 @@ export function decodeHerosTailTexture(raw: HerosTailRawTexure): Uint8Array[] {
                     for (let j = 0; j < raw.indices[i].length; j += 2) {
                         const pixel = (raw.indices[i][j + 1] << 8) | raw.indices[i][j];
                         const a = (pixel >> 15) & 1;
-                        const r = (pixel >> 10) & 0x1F;
-                        const g = (pixel >> 5) & 0x1F;
-                        const b = pixel & 0x1F;
+                        const r = (pixel >> 10) & 31;
+                        const g = (pixel >> 5) & 31;
+                        const b = pixel & 31;
                         rgba[j * 2] = (r << 3) | (r >> 2);
                         rgba[(j * 2) + 1] = (g << 3) | (g >> 2);
                         rgba[(j * 2) + 2] = (b << 3) | (b >> 2);
@@ -72,7 +72,7 @@ export function decodeHerosTailTexture(raw: HerosTailRawTexure): Uint8Array[] {
                     for (let h = 0; h < height; h++) {
                         for (let w = 0; w < (width >> 1); w++) {
                             const p = raw.indices[i][s++];
-                            pixels[d++] = p & 0x0F;
+                            pixels[d++] = p & 15;
                             pixels[d++] = p >> 4;
                         }
                     }

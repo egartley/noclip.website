@@ -27,7 +27,8 @@ export interface HerosTailEntity {
 }
 
 interface EntityBase {
-    bbox: AABB
+    flags: number;
+    bbox: AABB;
 }
 
 interface Tristrip {
@@ -41,6 +42,7 @@ export interface HerosTailMeshEntity extends HerosTailEntity, EntityBase {
     tristrips: Tristrip[];
     vertexCount: number;
     positions: number[];
+    textureIds: number[];
 }
 
 export interface HerosTailSplitEntity extends HerosTailEntity, EntityBase {
@@ -254,7 +256,7 @@ export class HerosTailParser {
         this.offset += 16; // unk 4 floats
         this.offset += 20;
 
-        return { bbox };
+        return { flags, bbox };
     }
 
     private getMeshEntity(): HerosTailMeshEntity {
@@ -292,7 +294,14 @@ export class HerosTailParser {
             this.offset += 4;
         }
 
-        return { type: HerosTailEntityType.MESH, bbox: base.bbox, vertexCount, tristrips, positions };
+        this.offset = textureListOffset;
+        const textureIdCount = this.getUshort();
+        const textureIds = Array(textureIdCount);
+        for (let i = 0; i < textureIdCount; i++) {
+            textureIds[i] = this.getUshort();
+        }
+
+        return { type: HerosTailEntityType.MESH, flags: base.flags, bbox: base.bbox, vertexCount, tristrips, positions, textureIds };
     }
 
     private getSplitEntity(): HerosTailSplitEntity {
@@ -306,7 +315,7 @@ export class HerosTailParser {
             subEntities[i] = this.getEntity(offset);
             this.offset = ret + 4;
         }
-        return { type: HerosTailEntityType.SPLIT, bbox: base.bbox, subEntities };
+        return { type: HerosTailEntityType.SPLIT, flags: base.flags, bbox: base.bbox, subEntities };
     }
 
     private getUint32(): number {

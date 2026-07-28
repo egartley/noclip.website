@@ -22,7 +22,6 @@ class Renderer implements SceneGfx {
 
     constructor(device: GfxDevice, edb: HerosTailEDBFile) {
         this.renderHelper = new GfxRenderHelper(device);
-        this.renderer = new HerosTailRenderer(this.renderHelper.renderCache, edb);
         this.clearColor = [0, 0, 0];
 
         this.textures = Array(edb.textures.length);
@@ -39,6 +38,8 @@ class Renderer implements SceneGfx {
             };
         }
         this.textureHolder = new FakeTextureHolder(viewerTextures);
+
+        this.renderer = new HerosTailRenderer(this.renderHelper.renderCache, edb, this.textures);
     }
 
     protected prepareToRender(device: GfxDevice, viewerInput: ViewerRenderInput): void {
@@ -116,43 +117,43 @@ const name = "Spyro: A Hero's Tail";
 const sceneDescs = [
     "Dragon Kingdom",
     new Scene("titles", "Title Screen"),
-    new Scene("realm1a", "Realm 1A"),
-    new Scene("realm1b", "Realm 1B"),
-    new Scene("realm1c", "Realm 1C"),
-    new Scene("realm1z", "Realm 1Z"),
-    new Scene("mr1_blk", "mr1_blk"),
-    new Scene("mr1_sgt", "mr1_sgt"),
-    new Scene("mr1_spx", "mr1_spx"),
-    new Scene("mr1_spy", "mr1_spy"),
+    new Scene("realm1a", "Dragon Village"),
+    new Scene("realm1b", "Crocovile Swamp"),
+    new Scene("realm1c", "Dragonfly Falls"),
+    new Scene("realm1z", "Gnasty's Cave"),
+    new Scene("mr1_sgt", "Island Speedway (Sgt. Byrd)"),
+    new Scene("mr1_blk", "Minigame (Blink)"),
+    new Scene("mr1_spx", "Minigame (Sparx)"),
+    new Scene("mr1_spy", "Minigame (Spyro)"),
     "Lost Cities",
-    new Scene("realm2a", "Realm 2A"),
-    new Scene("realm2b", "Realm 2B"),
-    new Scene("realm2c", "Realm 2C"),
-    new Scene("realm2z", "Realm 2Z"),
-    new Scene("mr2_blk", "mr2_blk"),
-    new Scene("mr2_sgt", "mr2_sgt"),
-    new Scene("mr2_spx", "mr2_spx"),
-    new Scene("mr2_spy", "mr2_spy"),
+    new Scene("realm2a", "Coastal Remains"),
+    new Scene("realm2b", "Cloudy Domain"),
+    new Scene("realm2c", "Sunken Ruins"),
+    new Scene("realm2z", "Watery Tomb"),
+    new Scene("mr2_sgt", "Cloudy Speedway (Sgt. Byrd)"),
+    new Scene("mr2_blk", "Minigame (Blink)"),
+    new Scene("mr2_spx", "Minigame (Sparx)"),
+    new Scene("mr2_spy", "Minigame (Spyro)"),
     "Icy Wilderness",
-    new Scene("realm3a", "Realm 3A"),
-    new Scene("realm3b", "Realm 3B"),
-    new Scene("realm3c", "Realm 3C"),
-    new Scene("realm3z", "Realm 3Z"),
-    new Scene("mr3_blk", "mr3_blk"),
-    new Scene("mr3_sgt", "mr3_sgt"),
-    new Scene("mr3_spx", "mr3_spx"),
-    new Scene("mr3_spy", "mr3_spy"),
+    new Scene("realm3a", "Frostbite Village"),
+    new Scene("realm3b", "Gloomy Glacier"),
+    new Scene("realm3c", "Ice Citadel"),
+    new Scene("realm3z", "Red's Chamber"),
+    new Scene("mr3_sgt", "Iceberg Aerobatics (Sgt. Byrd)"),
+    new Scene("mr3_blk", "Minigame (Blink)"),
+    new Scene("mr3_spx", "Minigame (Sparx)"),
+    new Scene("mr3_spy", "Minigame (Spyro)"),
     "Volcanic Isles",
-    new Scene("realm4a", "Realm 4A"),
-    new Scene("realm4b", "Realm 4B"),
-    new Scene("realm4c", "Realm 4C"),
-    new Scene("realm4d", "Realm 4D"),
-    new Scene("realm4e", "Realm 4E"),
-    new Scene("realm4z", "Realm 4Z"),
-    new Scene("mr4_blk", "mr4_blk"),
-    new Scene("mr4_sgt", "mr4_sgt"),
-    new Scene("mr4_spx", "mr4_spx"),
-    new Scene("mr4_spy", "mr4_spy"),
+    new Scene("realm4a", "Stormy Beach"),
+    new Scene("realm4b", "Molten Mount"),
+    new Scene("realm4c", "Magma Falls"),
+    new Scene("realm4d", "Dark Mine"),
+    new Scene("realm4e", "Red's Laboratory"),
+    new Scene("realm4z", "Red's Lair"),
+    new Scene("mr4_sgt", "Lava Palaver (Sgt. Byrd)"),
+    new Scene("mr4_blk", "Minigame (Blink)"),
+    new Scene("mr4_spx", "Minigame (Sparx)"),
+    new Scene("mr4_spy", "Minigame (Spyro)"),
     "Test Maps",
     new Scene("hogwarts", "Hogwarts"),
     new Scene("test_ab", "Test AB"),
