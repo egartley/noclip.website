@@ -59,7 +59,7 @@ export function decodeHerosTailTexture(raw: HerosTailRawTexure): Uint8Array[] {
             return raw.indices;
         case HerosTailTextureFormat.CLUT_64:
             {
-                // Credit: https://github.com/eurotools/eurochef/blob/main/eurochef/shared/src/platform/texture/ps2.rs
+                // Credit: https://gist.github.com/Fireboyd78/1546f5c86ebce52ce05e7837c697dc72
                 const mips = Array(raw.mips);
                 for (let i = 0; i < raw.mips; i++) {
                     const width = raw.width * Math.pow(0.5, i);

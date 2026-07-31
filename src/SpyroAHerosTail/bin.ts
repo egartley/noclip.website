@@ -1,4 +1,4 @@
-import { vec2 } from "gl-matrix";
+import { vec2, vec3 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { AABB } from "../Geometry";
 import { HerosTailTextureFormat } from "./texture";
@@ -8,6 +8,7 @@ import { HerosTailTextureFormat } from "./texture";
 export interface HerosTailEDBFile {
     refEntities: HerosTailEntity[];
     entities: HerosTailEntity[];
+    maps: HerosTailMap[];
     textures: HerosTailRawTexure[];
 }
 
@@ -23,7 +24,30 @@ export interface HerosTailRawTexure {
 }
 
 export interface HerosTailEntity {
-    type: HerosTailEntityType
+    hash: number;
+    type: HerosTailEntityType;
+    bbox: AABB;
+}
+
+export interface HerosTailMap {
+    placements: HerosTailPlacement[];
+}
+
+export interface HerosTailPlacement {
+    position: vec3;
+    rotation: vec3;
+    scale: vec3;
+    flags: number;
+    engineFlags: number;
+    map: number;
+    entityHash: number;
+    group: number;
+}
+
+interface CommonInfo {
+    hash: number;
+    unknown: number;
+    offset: number;
 }
 
 interface EntityBase {
@@ -51,18 +75,22 @@ export interface HerosTailSplitEntity extends HerosTailEntity, EntityBase {
 
 export enum HerosTailEntityType {
     MESH = 1537,
-    SPLIT = 1539
+    SPLIT = 1539,
+    INSTANCE = 1542,
+    MAP_ZONE = 1544
 }
 
 enum SectionType {
-    UNKNOWN,
+    UNUSED,
     ENTITY,
     REF_ENTITY,
-    TEXTURE
+    TEXTURE,
+    MAP
 }
 
 const EDB_VERSION = 240;
 const EDB_MAGIC = 1195724621;
+const MAP_CHECK = 1280;
 
 export class HerosTailParser {
     private view: DataView;
@@ -82,27 +110,27 @@ export class HerosTailParser {
         }
         this.offset += 72;
 
-        this.readSection(SectionType.UNKNOWN);
+        this.readSection(SectionType.UNUSED);
         const refEntities = this.readSection(SectionType.REF_ENTITY) as HerosTailEntity[];
         const entities = this.readSection(SectionType.ENTITY) as HerosTailEntity[];
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
-        this.readSection(SectionType.UNKNOWN);
+        this.readSection(SectionType.UNUSED); // animations
+        this.readSection(SectionType.UNUSED); // animation skins
+        this.readSection(SectionType.UNUSED); // animation scripts
+        const maps = this.readSection(SectionType.MAP) as HerosTailMap[];
+        this.readSection(SectionType.UNUSED); // animation modes
+        this.readSection(SectionType.UNUSED); // animation sets
+        this.readSection(SectionType.UNUSED); // particles
+        this.readSection(SectionType.UNUSED); // swooshes (???)
+        this.readSection(SectionType.UNUSED); // spreadsheets
+        this.readSection(SectionType.UNUSED); // fonts
+        this.readSection(SectionType.UNUSED); // unknown
         const textures = this.readSection(SectionType.TEXTURE) as HerosTailRawTexure[];
 
-        return { refEntities, entities, textures };
+        return { refEntities, entities, maps, textures };
     }
 
     private readSection(type: SectionType): any {
-        if (type === SectionType.UNKNOWN) {
+        if (type === SectionType.UNUSED) {
             this.offset += 8;
             return undefined;
         } else {
@@ -124,6 +152,9 @@ export class HerosTailParser {
                 case SectionType.TEXTURE:
                     section = this.getTextures(count);
                     break;
+                case SectionType.MAP:
+                    section = this.getMaps(count);
+                    break;
             }
 
             this.offset = ret;
@@ -131,38 +162,44 @@ export class HerosTailParser {
         }
     }
 
-    private getCommonInfo(): number {
-        // for now just returns the absolute offset, skips the hash
-        this.offset += 8;
+    private getCommonInfo(): CommonInfo {
+        const hash = this.getUint32();
+        const unknown = this.getUint32();
         const offset = this.getUint32();
         this.offset += 4;
-        return offset;
+        return { hash, unknown, offset };
     }
 
     private getTextures(count: number): HerosTailRawTexure[] {
         const textures: HerosTailRawTexure[] = Array(count);
         for (let i = 0; i < count; i++) {
-            const absoluteOffset = this.getCommonInfo();
+            const common = this.getCommonInfo();
             this.offset += 12;
-            textures[i] = this.getTexture(i, absoluteOffset);
+            textures[i] = this.getTexture(common, i);
         }
         return textures;
     }
 
-    private getTexture(id: number, offset: number): HerosTailRawTexure {
+    private getTexture(common: CommonInfo, id: number): HerosTailRawTexure {
         const ret = this.offset;
 
-        this.offset = offset;
+        this.offset = common.offset;
         const width = this.getUshort();
         const height = this.getUshort();
         this.offset += 4;
         const scroll = vec2.fromValues(this.getShort(), this.getShort());
         this.offset += 6;
-        const mips = this.getByte();
+        let mips = this.getByte();
         const format = this.getByte() as HerosTailTextureFormat;
         this.offset += 20;
         const clutOffset = this.offset + this.getUint32();
         const indicesOffset = this.offset + this.getUint32();
+
+        // temp workaround for broken mips for 4-bit textures
+        if (format === HerosTailTextureFormat.CLUT_64) {
+            mips = 1;
+        }
+
         let clut;
         let indices: Uint8Array[] = Array(mips);
         switch (format) {
@@ -208,9 +245,9 @@ export class HerosTailParser {
     private getEntities(count: number): HerosTailEntity[] {
         const entities: HerosTailEntity[] = Array(count);
         for (let i = 0; i < count; i++) {
-            const absoluteOffset = this.getCommonInfo();
+            const common = this.getCommonInfo();
             this.offset += 4;
-            entities[i] = this.getEntity(absoluteOffset);
+            entities[i] = this.getEntity(common);
         }
         return entities;
     }
@@ -218,26 +255,27 @@ export class HerosTailParser {
     private getRefEntities(count: number): HerosTailEntity[] {
         const entities: HerosTailEntity[] = Array(count);
         for (let i = 0; i < count; i++) {
-            this.offset += 8;
-            const absoluteOffset = this.getUint32();
-            this.offset += 4;
-            entities[i] = this.getEntity(absoluteOffset);
+            const common = this.getCommonInfo();
+            entities[i] = this.getEntity(common);
         }
         return entities;
     }
 
-    private getEntity(offset: number): HerosTailEntity {
+    private getEntity(common: CommonInfo): HerosTailEntity {
         const ret = this.offset;
 
-        this.offset = offset;
+        this.offset = common.offset;
         const type = this.getUint32();
-        let entity = { type };
+        let entity = { hash: common.hash, type, bbox: new AABB() };
         switch (type) {
             case HerosTailEntityType.MESH:
-                entity = this.getMeshEntity();
+                entity = this.getMeshEntity(entity);
                 break;
             case HerosTailEntityType.SPLIT:
-                entity = this.getSplitEntity();
+                entity = this.getSplitEntity(entity);
+                break;
+            default:
+                console.warn("Unimplemented entity type", type, "at", this.offset - 4);
                 break;
         }
 
@@ -259,9 +297,8 @@ export class HerosTailParser {
         return { flags, bbox };
     }
 
-    private getMeshEntity(): HerosTailMeshEntity {
+    private getMeshEntity(template: HerosTailEntity): HerosTailMeshEntity {
         const base = this.getEntityBase();
-
         const textureListOffset = this.offset + this.getUint32();
         const tristripOffset = this.offset + this.getUint32();
         const vertexOffset = this.offset + this.getUint32();
@@ -280,7 +317,7 @@ export class HerosTailParser {
             const colors: number[] = [];
             for (let j = 0; j < count; j++) {
                 uvs.push(this.getFloat(), this.getFloat());
-                indices.push(this.getUshort());
+                indices.push(this.getUshort()); // packed index and restart flag
                 this.offset += 2;
                 colors.push(this.getByte(), this.getByte(), this.getByte(), this.getByte());
             }
@@ -301,10 +338,10 @@ export class HerosTailParser {
             textureIds[i] = this.getUshort();
         }
 
-        return { type: HerosTailEntityType.MESH, flags: base.flags, bbox: base.bbox, vertexCount, tristrips, positions, textureIds };
+        return { hash: template.hash, type: HerosTailEntityType.MESH, flags: base.flags, bbox: base.bbox, vertexCount, tristrips, positions, textureIds };
     }
 
-    private getSplitEntity(): HerosTailSplitEntity {
+    private getSplitEntity(template: HerosTailEntity): HerosTailSplitEntity {
         const base = this.getEntityBase();
         const count = this.getUint32();
         this.offset += 4;
@@ -312,10 +349,61 @@ export class HerosTailParser {
         for (let i = 0; i < count; i++) {
             const ret = this.offset;
             const offset = this.offset + this.getUint32();
-            subEntities[i] = this.getEntity(offset);
+            subEntities[i] = this.getEntity({ hash: 0, offset, unknown: 0 });
             this.offset = ret + 4;
         }
-        return { type: HerosTailEntityType.SPLIT, flags: base.flags, bbox: base.bbox, subEntities };
+        return { hash: template.hash, type: HerosTailEntityType.SPLIT, flags: base.flags, bbox: base.bbox, subEntities };
+    }
+
+    private getMaps(count: number): HerosTailMap[] {
+        const maps: HerosTailMap[] = Array(count);
+        for (let i = 0; i < count; i++) {
+            const common = this.getCommonInfo();
+            maps[i] = this.getMap(common);
+        }
+        return maps;
+    }
+
+    private getMap(common: CommonInfo): HerosTailMap {
+        const ret = this.offset;
+
+        this.offset = common.offset;
+        const check = this.getUint32();
+        if (check !== MAP_CHECK) {
+            console.warn("Map check failed at", this.offset - 4);
+        }
+        this.offset += 68;
+        const placementCount = this.getUint32();
+
+        const ret2 = this.offset + 4;
+        const placementOffset = this.offset + this.getUint32();
+        this.offset = placementOffset;
+
+        const placements = Array(placementCount);
+        for (let i = 0; i < placementCount; i++) {
+            placements[i] = this.getPlacement();
+        }
+        this.offset = ret2;
+        this.offset += 52;
+        // zones
+
+        this.offset = ret;
+        return { placements };
+    }
+
+    private getPlacement(): HerosTailPlacement {
+        this.offset += 4;
+        const position = vec3.fromValues(this.getFloat(), this.getFloat(), this.getFloat());
+        const flags = this.getUint32();
+        const rotation = vec3.fromValues(this.getFloat(), this.getFloat(), this.getFloat());
+        const scale = vec3.fromValues(this.getFloat(), this.getFloat(), this.getFloat());
+        const engineFlags = this.getUshort();
+        const map = this.getUshort();
+        const entityHash = this.getUint32();
+        this.offset += 2;
+        const group = this.getShort();
+        this.offset += 4;
+        return { position, rotation, scale, flags, engineFlags, map, entityHash, group };
     }
 
     private getUint32(): number {

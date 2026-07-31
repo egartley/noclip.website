@@ -10,6 +10,10 @@ import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { HerosTailEDBFile, HerosTailEntity, HerosTailEntityType, HerosTailMeshEntity, HerosTailSplitEntity } from "./bin";
 import { HerosTailTexture } from "./texture";
 import { TextureMapping } from "../TextureHolder";
+import { mat4, ReadonlyMat4, vec2, vec3 } from "gl-matrix";
+import { computeModelMatrixSRT } from "../MathHelpers";
+import { White } from "../Color";
+import { AABB } from "../Geometry";
 
 enum EntityFlags {
     USE_TEXTURE_LIST = 1
@@ -27,8 +31,15 @@ interface RenderData {
     uvs: number[];
 }
 
+interface Material {
+    samplers: GfxSamplerBinding[];
+    scroll: vec2;
+}
+
 class Shader extends DeviceProgram {
     public static ub_SceneParams = 0;
+    public static ub_InstanceParams = 1;
+    public static ub_DrawParams = 2;
 
     public override both = `
 precision highp float;
@@ -36,7 +47,16 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_ViewProj;
+    Mat4x4 u_ProjView;
+    float u_Time;
+};
+
+layout(std140) uniform ub_InstanceParams {
+    Mat4x4 u_Shift;
+};
+
+layout(std140) uniform ub_DrawParams {
+    vec2 u_Scroll;
 };
 
 uniform sampler2D u_Texture;
@@ -51,8 +71,8 @@ layout(location = 2) in vec2 a_UV;
 
 void main() {
     v_Color = a_Color;
-    v_UV = a_UV;
-    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
+    v_UV = a_UV + (u_Time * u_Scroll);
+    gl_Position = UnpackMatrix(u_ProjView) * UnpackMatrix(u_Shift) * vec4(a_Position, 1.0);
 }
 #endif
 
@@ -62,21 +82,69 @@ void main() {
     if (texColor.a < 0.1) {
         discard;
     }
-    gl_FragColor = v_Color * texColor;
+    gl_FragColor = texColor * vec4(clamp(v_Color.rgb + vec3(0.2), 0.0, 1.0), v_Color.a);
 }
 #endif
     `;
 }
 
 const WORLD_SCALE = 200.0;
+const FRAME_TIME_30 = 0.03;
 const TRISTRIP_RESTART = 0x5000;
-const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 1 }];
+const NOCLIP_SPACE_CORRECTION = mat4.fromValues(
+    -1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+);
+const SCROLL_SCALE = vec2.fromValues(0.00005, 0.00005);
+const SCRATCH_MVP = mat4.create();
+const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 3, numSamplers: 1 }];
+
+function computeShiftMatrix(scale: vec3, rotation: vec3, position: vec3) {
+    const srt = mat4.create();
+    computeModelMatrixSRT(srt,
+        scale[0] * WORLD_SCALE, scale[1] * WORLD_SCALE, scale[2] * WORLD_SCALE,
+        rotation[0], rotation[1], rotation[2],
+        position[0] * WORLD_SCALE, position[1] * WORLD_SCALE, position[2] * WORLD_SCALE
+    );
+    mat4.mul(srt, NOCLIP_SPACE_CORRECTION, srt);
+    return srt;
+}
+
+function inView(bbox: Float32Array, m: ReadonlyMat4) {
+    // cheaper frustum culling than with aabb
+    let aol = true, aor = true;
+    let aob = true, aot = true;
+    let aon = true, aof = true;
+    for (let i = 0; i < 26; i += 3) {
+        const x = bbox[i], y = bbox[i + 1], z = bbox[i + 2];
+        const xw = x * m[0] + y * m[4] + z * m[8] + m[12];
+        const yw = x * m[1] + y * m[5] + z * m[9] + m[13];
+        const zw = x * m[2] + y * m[6] + z * m[10] + m[14];
+        const ww = x * m[3] + y * m[7] + z * m[11] + m[15];
+        if (xw >= -ww && xw <= ww && yw >= -ww && yw <= ww && zw >= 0 && zw <= ww) {
+            return true;
+        }
+        if (xw > -ww) aol = false;
+        if (xw < ww) aor = false;
+        if (yw > -ww) aob = false;
+        if (yw < ww) aot = false;
+        if (zw > 0) aon = false;
+        if (zw < ww) aof = false;
+    }
+    if (aol || aor || aob || aot || aon || aof) {
+        return false;
+    }
+    return true;
+}
 
 export class HerosTailRenderer {
+    public refEntities: EntityRenderer[];
     public entities: EntityRenderer[];
     private gfxProgram: GfxProgram;
     private inputLayout: GfxInputLayout;
-    private textureMappings: Map<number, GfxSamplerBinding[]>;
+    private materials: Map<number, Material>;
 
     constructor(cache: GfxRenderCache, edb: HerosTailEDBFile, textures: HerosTailTexture[]) {
         this.gfxProgram = cache.createProgram(new Shader());
@@ -88,23 +156,59 @@ export class HerosTailRenderer {
             wrapS: GfxWrapMode.Repeat,
             wrapT: GfxWrapMode.Repeat
         });
-        this.textureMappings = new Map();
+        this.materials = new Map();
         for (let i = 0; i < textures.length; i++) {
             const tm = new TextureMapping();
+            // scroll values are scaled down to approximately match the game
+            const scroll = vec2.create();
+            vec2.mul(scroll, textures[i].scroll, SCROLL_SCALE);
             tm.gfxTexture = textures[i].gfxTexture;
             tm.gfxSampler = gfxSampler;
-            this.textureMappings.set(i, [tm]);
+            this.materials.set(i, { samplers: [tm], scroll });
         }
 
-        this.entities = [];
+        this.refEntities = [];
         for (let i = 0; i < edb.refEntities.length; i++) {
             const entity = edb.refEntities[i];
             if (entity.type === HerosTailEntityType.SPLIT || entity.type === HerosTailEntityType.MESH) {
-                const er = new EntityRenderer(cache, `ref_${i}`, entity);
+                // ref entities are rooted to origin, so their shift matrix is identity
+                const er = new EntityRenderer(cache, `ref_${i}`, entity, computeShiftMatrix([1, 1, 1], [0, 0, 0], [0, 0, 0]));
                 if (er.drawCount > 0) {
-                    this.entities.push(er);
+                    this.refEntities.push(er);
                 } else {
                     er.destroy(cache.device);
+                }
+            }
+        }
+
+        this.entities = [];
+        for (let i = 0; i < edb.maps.length; i++) {
+            if (i > 0) {
+                // only first map for now
+                console.warn("Skipping subsequent maps...");
+                break;
+            }
+            for (const placement of edb.maps[i].placements) {
+                const entity = edb.entities.find(e => e.hash === placement.entityHash);
+                if (!entity) {
+                    console.warn("Could not find entity with hash of", placement.entityHash);
+                    continue;
+                } else if (entity.type !== HerosTailEntityType.MESH && entity.type !== HerosTailEntityType.SPLIT) {
+                    console.warn("Unimplemented placement for entity type", entity.type);
+                    continue;
+                } else {
+                    const i = this.entities.findIndex(er => er.name === placement.entityHash.toString());
+                    const shift = computeShiftMatrix(placement.scale, placement.rotation, placement.position);
+                    if (i < 0) {
+                        const er = new EntityRenderer(cache, placement.entityHash.toString(), entity, shift);
+                        if (er.drawCount > 0) {
+                            this.entities.push(er);
+                        } else {
+                            er.destroy(cache.device);
+                        }
+                    } else {
+                        this.entities[i].shiftMatrices.push(shift);
+                    }
                 }
             }
         }
@@ -130,14 +234,22 @@ export class HerosTailRenderer {
         template.setBindingLayouts(BINDING_LAYOUTS);
         template.setUniformBuffer(renderHelper.uniformBuffer);
 
-        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 16);
+        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 17);
         const d = template.mapUniformBufferF32(Shader.ub_SceneParams);
-        // u_ViewProj (16)
+        // u_ProjView (16)
         offs += fillMatrix4x4(d, offs, viewerInput.camera.clipFromWorldMatrix);
+        // u_Time (1)
+        d[offs++] = viewerInput.time * FRAME_TIME_30;
+
+        for (const e of this.refEntities) {
+            if (e.visible) {
+                e.prepareToRender(device, renderHelper, viewerInput, this.inputLayout, this.materials);
+            }
+        }
 
         for (const e of this.entities) {
             if (e.visible) {
-                e.prepareToRender(device, renderHelper, viewerInput, this.inputLayout, this.textureMappings);
+                e.prepareToRender(device, renderHelper, viewerInput, this.inputLayout, this.materials);
             }
         }
 
@@ -145,7 +257,7 @@ export class HerosTailRenderer {
     }
 
     public destroy(device: GfxDevice) {
-        for (const e of this.entities) {
+        for (const e of [...this.refEntities, ...this.entities]) {
             e.destroy(device);
         }
     }
@@ -154,13 +266,20 @@ export class HerosTailRenderer {
 class EntityRenderer {
     public drawCount: number;
     public visible: boolean = true;
+    public shiftMatrices: mat4[] = [];
     private baseEntityFlags: number;
     private drawCalls: DrawCall[] = [];
+    private bboxPoints: Float32Array;
     private indexBufferDescriptor: GfxIndexBufferDescriptor;
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
 
-    constructor(cache: GfxRenderCache, public name: string, entity: HerosTailEntity) {
-        const device = cache.device;        
+    constructor(cache: GfxRenderCache, public name: string, entity: HerosTailEntity, shiftMatrix?: mat4) {
+        const device = cache.device;
+        if (shiftMatrix) {
+            this.shiftMatrices = [shiftMatrix];
+        } else {
+            this.shiftMatrices = [mat4.create()];
+        }
 
         let vertices: number[] = [];
         let colors: number[] = [];
@@ -205,6 +324,9 @@ class EntityRenderer {
                     }
                 }
                 break;
+            default:
+                this.baseEntityFlags = 0;
+                break;
         }
 
         for (const [textureId, texIndices] of sortedIndices.entries()) {
@@ -220,9 +342,19 @@ class EntityRenderer {
         }
 
         this.drawCount = indices.length;
+        this.bboxPoints = new Float32Array([
+            entity.bbox.min[0], entity.bbox.min[1], entity.bbox.min[2],
+            entity.bbox.max[0], entity.bbox.min[1], entity.bbox.min[2],
+            entity.bbox.min[0], entity.bbox.max[1], entity.bbox.min[2],
+            entity.bbox.max[0], entity.bbox.max[1], entity.bbox.min[2],
+            entity.bbox.min[0], entity.bbox.min[1], entity.bbox.max[2],
+            entity.bbox.max[0], entity.bbox.min[1], entity.bbox.max[2],
+            entity.bbox.min[0], entity.bbox.max[1], entity.bbox.max[2],
+            entity.bbox.max[0], entity.bbox.max[1], entity.bbox.max[2]
+        ]);
 
         this.vertexBufferDescriptors = [
-            { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices.map(v => v * WORLD_SCALE)).buffer), byteOffset: 0 },
+            { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
             { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors.map(c => c / 255)).buffer), byteOffset: 0 },
             { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(uvs).buffer), byteOffset: 0 }
         ];
@@ -313,14 +445,37 @@ class EntityRenderer {
         this.visible = v;
     }
 
-    public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, inputLayout: GfxInputLayout, textureMappings: Map<number, GfxSamplerBinding[]>) {
+    public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, inputLayout: GfxInputLayout, materials: Map<number, Material>) {
         const template = renderHelper.renderInstManager.pushTemplate();
         template.setVertexInput(inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
-        for (const dc of this.drawCalls) {
-            const renderInst = renderHelper.renderInstManager.newRenderInst();
-            renderInst.setSamplerBindingsFromTextureMappings(textureMappings.get(dc.textureId)!);
-            renderInst.setDrawCount(dc.indexCount, dc.indexOffset);
-            renderHelper.renderInstManager.submitRenderInst(renderInst);
+        for (const shift of this.shiftMatrices) {
+            mat4.mul(SCRATCH_MVP, viewerInput.camera.clipFromWorldMatrix, shift);
+            if (!inView(this.bboxPoints, SCRATCH_MVP)) {
+                continue;
+            }
+            const template2 = renderHelper.renderInstManager.pushTemplate();
+            let offs = template2.allocateUniformBuffer(Shader.ub_InstanceParams, 16);
+            const d = template2.mapUniformBufferF32(Shader.ub_InstanceParams);
+            // u_Shift (16)
+            offs += fillMatrix4x4(d, offs, shift);
+
+            for (const dc of this.drawCalls) {
+                const renderInst = renderHelper.renderInstManager.newRenderInst();
+                const mat = materials.get(dc.textureId)!;
+
+                offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 2);
+                const d = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
+                // u_Scroll (2)
+                d[offs++] = mat.scroll[0];
+                d[offs++] = mat.scroll[1];
+
+                renderInst.setSamplerBindingsFromTextureMappings(mat.samplers);
+                renderInst.setDrawCount(dc.indexCount, dc.indexOffset);
+
+                renderHelper.renderInstManager.submitRenderInst(renderInst);
+            }
+
+            renderHelper.renderInstManager.popTemplate();
         }
         renderHelper.renderInstManager.popTemplate();
     }

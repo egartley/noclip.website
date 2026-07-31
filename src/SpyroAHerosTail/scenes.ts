@@ -72,9 +72,8 @@ class Renderer implements SceneGfx {
 
     public createPanels(): Panel[] {
         const layersPanel = new LayerPanel();
-        layersPanel.setLayers([...this.renderer.entities]);
-        layersPanel.setTitle(LAYER_ICON, "Ref Entities");
-
+        layersPanel.setLayers([...this.renderer.refEntities, ...this.renderer.entities]);
+        layersPanel.setTitle(LAYER_ICON, "Entities");
         return [layersPanel];
     }
 
@@ -83,6 +82,7 @@ class Renderer implements SceneGfx {
         for (const t of this.textures) {
             device.destroyTexture(t.gfxTexture);
         }
+        this.renderHelper.debugDraw.destroy();
         this.renderHelper.destroy();
     }
 }
@@ -94,9 +94,9 @@ class Scene implements SceneDesc {
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
+        device.checkForLeaks();
         const ebdFile = await context.dataFetcher.fetchData(`${pathBase}/${this.id}.edb`);
         const edb = new HerosTailParser(ebdFile).parse();
-        // console.log(edb);
         return new Renderer(device, edb);
     }
 }
@@ -104,12 +104,15 @@ class Scene implements SceneDesc {
 /*
 TODO
 
-Fix mips for CLUT_64 textures
+Fix mips for CLUT_64 textures (disabled for now)
 Confirm alpha value for ARGB_1555 textures
-Animated textures (txa and scrolling)
-Geometry is mirrored?
-Some ref entities can be duplicates
-Add PS2 texture decoding to common
+Animated textures frames
+Some ref entities can be duplicates (handle with map zones?)
+Add PS2 texture decoding/unswizzling to common
+Use direct vertex modification to account for X flip instead of shift matrix
+Properly handle split entities rather than merging together
+Better way to pass around textures?
+Troubleshoot rare occurence of buffer leak
  */
 
 const id = "SpyroAHT";
@@ -127,8 +130,8 @@ const sceneDescs = [
     new Scene("mr1_spy", "Minigame (Spyro)"),
     "Lost Cities",
     new Scene("realm2a", "Coastal Remains"),
-    new Scene("realm2b", "Cloudy Domain"),
-    new Scene("realm2c", "Sunken Ruins"),
+    new Scene("realm2b", "Sunken Ruins"),
+    new Scene("realm2c", "Cloudy Domain"),
     new Scene("realm2z", "Watery Tomb"),
     new Scene("mr2_sgt", "Cloudy Speedway (Sgt. Byrd)"),
     new Scene("mr2_blk", "Minigame (Blink)"),
