@@ -1,22 +1,25 @@
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxSamplerBinding, GfxMipFilterMode, GfxTexFilterMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxSamplerBinding, GfxMipFilterMode, GfxTexFilterMode, GfxWrapMode, GfxMegaStateDescriptor, GfxCullMode, GfxBlendFactor, GfxBlendMode } from "../gfx/platform/GfxPlatform";
 import { GfxInputLayout, GfxProgram } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
-import { HerosTailEDBFile, HerosTailEntity, HerosTailEntityType, HerosTailMeshEntity, HerosTailSplitEntity } from "./bin";
+import { HerosTailEDBFile, HerosTailEntity, HerosTailEntityType, HerosTailMap, HerosTailMapZone, HerosTailMapZoneEntity, HerosTailMapZoneEnvData, HerosTailMeshEntity, HerosTailPlacement, HerosTailSplitEntity } from "./bin";
 import { HerosTailTexture } from "./texture";
 import { TextureMapping } from "../TextureHolder";
 import { mat4, ReadonlyMat4, vec2, vec3 } from "gl-matrix";
 import { computeModelMatrixSRT } from "../MathHelpers";
-import { White } from "../Color";
+import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { AABB } from "../Geometry";
+import { White } from "../Color";
 
 enum EntityFlags {
-    USE_TEXTURE_LIST = 1
+    USE_TEXTURE_LIST = 1,
+    POLY_OFFSET = 16384,
+    TRANSPARENT = 1073741824
 }
 
 interface DrawCall {
@@ -99,6 +102,7 @@ const NOCLIP_SPACE_CORRECTION = mat4.fromValues(
 );
 const SCROLL_SCALE = vec2.fromValues(0.00005, 0.00005);
 const SCRATCH_MVP = mat4.create();
+const IDENTITY_SHIFT = computeShiftMatrix([1, 1, 1], [0, 0, 0], [0, 0, 0]);
 const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 3, numSamplers: 1 }];
 
 function computeShiftMatrix(scale: vec3, rotation: vec3, position: vec3) {
@@ -140,8 +144,8 @@ function inView(bbox: Float32Array, m: ReadonlyMat4) {
 }
 
 export class HerosTailRenderer {
-    public refEntities: EntityRenderer[];
-    public entities: EntityRenderer[];
+    public zones: MapZoneRenderer[];
+    public doZoneCulling: boolean;
     private gfxProgram: GfxProgram;
     private inputLayout: GfxInputLayout;
     private materials: Map<number, Material>;
@@ -167,51 +171,29 @@ export class HerosTailRenderer {
             this.materials.set(i, { samplers: [tm], scroll });
         }
 
-        this.refEntities = [];
-        for (let i = 0; i < edb.refEntities.length; i++) {
-            const entity = edb.refEntities[i];
-            if (entity.type === HerosTailEntityType.SPLIT || entity.type === HerosTailEntityType.MESH) {
-                // ref entities are rooted to origin, so their shift matrix is identity
-                const er = new EntityRenderer(cache, `ref_${i}`, entity, computeShiftMatrix([1, 1, 1], [0, 0, 0], [0, 0, 0]));
-                if (er.drawCount > 0) {
-                    this.refEntities.push(er);
-                } else {
-                    er.destroy(cache.device);
-                }
+        if (edb.maps.length > 0 && edb.maps[0].zones.length > 0) {
+            const map = edb.maps[0];
+            this.zones = Array(map.zones.length);
+            for (let i = 0; i < map.zones.length; i++) {
+                this.zones[i] = new MapZoneRenderer(cache, edb, `Zone ${i}`, map.zones[i], map.placements.filter(p => p.zoneIndex === i));
             }
+        } else {
+            this.zones = [];
         }
+        this.doZoneCulling = this.zones.length > 1;
 
-        this.entities = [];
-        for (let i = 0; i < edb.maps.length; i++) {
-            if (i > 0) {
-                // only first map for now
-                console.warn("Skipping subsequent maps...");
-                break;
-            }
-            for (const placement of edb.maps[i].placements) {
-                const entity = edb.entities.find(e => e.hash === placement.entityHash);
-                if (!entity) {
-                    console.warn("Could not find entity with hash of", placement.entityHash);
-                    continue;
-                } else if (entity.type !== HerosTailEntityType.MESH && entity.type !== HerosTailEntityType.SPLIT) {
-                    console.warn("Unimplemented placement for entity type", entity.type);
-                    continue;
-                } else {
-                    const i = this.entities.findIndex(er => er.name === placement.entityHash.toString());
-                    const shift = computeShiftMatrix(placement.scale, placement.rotation, placement.position);
-                    if (i < 0) {
-                        const er = new EntityRenderer(cache, placement.entityHash.toString(), entity, shift);
-                        if (er.drawCount > 0) {
-                            this.entities.push(er);
-                        } else {
-                            er.destroy(cache.device);
-                        }
-                    } else {
-                        this.entities[i].shiftMatrices.push(shift);
-                    }
-                }
-            }
-        }
+        // this.refEntities = [];
+        // for (let i = 0; i < edb.refEntities.length; i++) {
+        //     const entity = edb.refEntities[i];
+        //     if (entity.type === HerosTailEntityType.SPLIT || entity.type === HerosTailEntityType.MESH) {
+        //         const er = new EntityRenderer(cache, `ref_${i}`, entity, IDENTITY_SHIFT);
+        //         if (er.drawCount > 0) {
+        //             this.refEntities.push(er);
+        //         } else {
+        //             er.destroy(cache.device);
+        //         }
+        //     }
+        // }
 
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
@@ -241,23 +223,87 @@ export class HerosTailRenderer {
         // u_Time (1)
         d[offs++] = viewerInput.time * FRAME_TIME_30;
 
-        for (const e of this.refEntities) {
-            if (e.visible) {
-                e.prepareToRender(device, renderHelper, viewerInput, this.inputLayout, this.materials);
-            }
-        }
-
-        for (const e of this.entities) {
-            if (e.visible) {
-                e.prepareToRender(device, renderHelper, viewerInput, this.inputLayout, this.materials);
-            }
+        for (const e of this.zones) {
+            e.prepareToRender(device, renderHelper, viewerInput, this.inputLayout, this.materials, this.doZoneCulling);
         }
 
         renderHelper.renderInstManager.popTemplate();
     }
 
     public destroy(device: GfxDevice) {
-        for (const e of [...this.refEntities, ...this.entities]) {
+        for (const e of [...this.zones]) {
+            e.destroy(device);
+        }
+    }
+}
+
+class MapZoneRenderer {
+    public visible: boolean = true;
+    public refEntity: EntityRenderer;
+    public entities: EntityRenderer[];
+    private bboxPoints: Float32Array;
+    private envData: HerosTailMapZoneEnvData;
+
+    constructor(cache: GfxRenderCache, edb: HerosTailEDBFile, public name: string, zone: HerosTailMapZone, placements: HerosTailPlacement[]) {
+        const refEntity = edb.refEntities[(edb.refEntities[zone.refEntityIndex] as HerosTailMapZoneEntity).refEntityIndex];
+        this.refEntity = new EntityRenderer(cache, `ref_${name}`, refEntity, IDENTITY_SHIFT);
+
+        this.entities = [];
+        for (const placement of placements) {
+            const entity = edb.entities.find(e => e.hash === placement.entityHash);
+            if (!entity) {
+                console.warn("Could not find entity with hash of", placement.entityHash);
+                continue;
+            } else if (entity.type !== HerosTailEntityType.MESH && entity.type !== HerosTailEntityType.SPLIT) {
+                console.warn("Unimplemented placement for entity type", entity.type);
+                continue;
+            } else {
+                const name = placement.entityHash.toString(16);
+                const i = this.entities.findIndex(er => er.name === name);
+                const shift = computeShiftMatrix(placement.scale, placement.rotation, placement.position);
+                if (i < 0) {
+                    const er = new EntityRenderer(cache, name, entity, shift);
+                    if (er.drawCount > 0) {
+                        this.entities.push(er);
+                    } else {
+                        er.destroy(cache.device);
+                    }
+                } else {
+                    this.entities[i].shiftMatrices.push(shift);
+                }
+            }
+        }
+
+        this.envData = zone.envData;
+        const bbox = new AABB();
+        bbox.transform(zone.bbox, IDENTITY_SHIFT);
+        this.bboxPoints = new Float32Array([
+            bbox.min[0], bbox.min[1], bbox.min[2],
+            bbox.max[0], bbox.min[1], bbox.min[2],
+            bbox.min[0], bbox.max[1], bbox.min[2],
+            bbox.max[0], bbox.max[1], bbox.min[2],
+            bbox.min[0], bbox.min[1], bbox.max[2],
+            bbox.max[0], bbox.min[1], bbox.max[2],
+            bbox.min[0], bbox.max[1], bbox.max[2],
+            bbox.max[0], bbox.max[1], bbox.max[2]
+        ]);
+    }
+
+    public setVisible(v: boolean): void {
+        this.visible = v;
+    }
+
+    public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, inputLayout: GfxInputLayout, materials: Map<number, Material>, doCulling: boolean) {
+        if (this.visible && (!doCulling || (doCulling && inView(this.bboxPoints, viewerInput.camera.clipFromWorldMatrix)))) {
+            this.refEntity.prepareToRender(device, renderHelper, viewerInput, inputLayout, materials);
+            for (const e of this.entities) {
+                e.prepareToRender(device, renderHelper, viewerInput, inputLayout, materials);
+            }
+        }
+    }
+
+    public destroy(device: GfxDevice) {
+        for (const e of [this.refEntity, ...this.entities]) {
             e.destroy(device);
         }
     }
@@ -265,15 +311,15 @@ export class HerosTailRenderer {
 
 class EntityRenderer {
     public drawCount: number;
-    public visible: boolean = true;
-    public shiftMatrices: mat4[] = [];
+    public shiftMatrices: ReadonlyMat4[] = [];
     private baseEntityFlags: number;
     private drawCalls: DrawCall[] = [];
     private bboxPoints: Float32Array;
+    private megaStateFlags: Partial<GfxMegaStateDescriptor>;
     private indexBufferDescriptor: GfxIndexBufferDescriptor;
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
 
-    constructor(cache: GfxRenderCache, public name: string, entity: HerosTailEntity, shiftMatrix?: mat4) {
+    constructor(cache: GfxRenderCache, public name: string, entity: HerosTailEntity, shiftMatrix?: ReadonlyMat4) {
         const device = cache.device;
         if (shiftMatrix) {
             this.shiftMatrices = [shiftMatrix];
@@ -328,6 +374,19 @@ class EntityRenderer {
                 this.baseEntityFlags = 0;
                 break;
         }
+        // const n = [];
+        // for (let i = 0; i < 32; i++) {
+        //     n.push(this.baseEntityFlags & (1 << i));
+        // }
+        // console.log(this.name, this.baseEntityFlags, n);
+        this.megaStateFlags = {};
+        // if ((this.baseEntityFlags & EntityFlags.TRANSPARENT) !== 0) {
+        //     setAttachmentStateSimple(this.megaStateFlags, {
+        //         blendMode: GfxBlendMode.Add,
+        //         blendSrcFactor: GfxBlendFactor.SrcAlpha,
+        //         blendDstFactor: GfxBlendFactor.One,
+        //     });
+        // }
 
         for (const [textureId, texIndices] of sortedIndices.entries()) {
             if (texIndices.length === 0) {
@@ -441,13 +500,10 @@ class EntityRenderer {
         return { positions, colors, uvs };
     }
 
-    public setVisible(v: boolean): void {
-        this.visible = v;
-    }
-
     public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, inputLayout: GfxInputLayout, materials: Map<number, Material>) {
         const template = renderHelper.renderInstManager.pushTemplate();
         template.setVertexInput(inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
+        // template.setMegaStateFlags(this.megaStateFlags);
         for (const shift of this.shiftMatrices) {
             mat4.mul(SCRATCH_MVP, viewerInput.camera.clipFromWorldMatrix, shift);
             if (!inView(this.bboxPoints, SCRATCH_MVP)) {

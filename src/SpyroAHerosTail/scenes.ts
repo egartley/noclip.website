@@ -9,7 +9,7 @@ import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
 import { HerosTailEDBFile, HerosTailParser } from "./bin.js";
 import { HerosTailRenderer } from "./render.js";
-import { Panel, LayerPanel, LAYER_ICON } from "../ui.js";
+import { Panel, LayerPanel, LAYER_ICON, COOL_BLUE_COLOR, RENDER_HACKS_ICON, Checkbox } from "../ui.js";
 import { decodeHerosTailTexture, HerosTailTexture, HerosTailTextureFormat } from "./texture.js";
 
 class Renderer implements SceneGfx {
@@ -72,9 +72,19 @@ class Renderer implements SceneGfx {
 
     public createPanels(): Panel[] {
         const layersPanel = new LayerPanel();
-        layersPanel.setLayers([...this.renderer.refEntities, ...this.renderer.entities]);
-        layersPanel.setTitle(LAYER_ICON, "Entities");
-        return [layersPanel];
+        layersPanel.setLayers([...this.renderer.zones]);
+        layersPanel.setTitle(LAYER_ICON, "Map Zones");
+
+        const renderOptions = new Panel();
+        renderOptions.customHeaderBackgroundColor = COOL_BLUE_COLOR;
+        renderOptions.setTitle(RENDER_HACKS_ICON, "Render Hacks");
+        const zoneCull = new Checkbox("Apply Zone Culling", this.renderer.doZoneCulling);
+        zoneCull.onchanged = () => {
+            this.renderer.doZoneCulling = zoneCull.checked
+        };
+        renderOptions.contents.appendChild(zoneCull.elem);
+
+        return [layersPanel, renderOptions];
     }
 
     public destroy(device: GfxDevice): void {
@@ -82,7 +92,6 @@ class Renderer implements SceneGfx {
         for (const t of this.textures) {
             device.destroyTexture(t.gfxTexture);
         }
-        this.renderHelper.debugDraw.destroy();
         this.renderHelper.destroy();
     }
 }
@@ -104,12 +113,11 @@ class Scene implements SceneDesc {
 /*
 TODO
 
-Fix mips for CLUT_64 textures (disabled for now)
+Fix texture mips
 Confirm alpha value for ARGB_1555 textures
 Animated textures frames
 Some ref entities can be duplicates (handle with map zones?)
 Add PS2 texture decoding/unswizzling to common
-Use direct vertex modification to account for X flip instead of shift matrix
 Properly handle split entities rather than merging together
 Better way to pass around textures?
 Troubleshoot rare occurence of buffer leak
@@ -128,6 +136,8 @@ const sceneDescs = [
     new Scene("mr1_blk", "Minigame (Blink)"),
     new Scene("mr1_spx", "Minigame (Sparx)"),
     new Scene("mr1_spy", "Minigame (Spyro)"),
+    new Scene("r1linkab", "Interstitial (Village/Swamp)"),
+    new Scene("r1linkac", "Interstitial (Village/Falls)"),
     "Lost Cities",
     new Scene("realm2a", "Coastal Remains"),
     new Scene("realm2b", "Sunken Ruins"),
@@ -137,6 +147,8 @@ const sceneDescs = [
     new Scene("mr2_blk", "Minigame (Blink)"),
     new Scene("mr2_spx", "Minigame (Sparx)"),
     new Scene("mr2_spy", "Minigame (Spyro)"),
+    new Scene("r2linkab", "Interstitial (Remains/Ruins)"),
+    new Scene("r2linkac", "Interstitial (Remains/Domain)"),
     "Icy Wilderness",
     new Scene("realm3a", "Frostbite Village"),
     new Scene("realm3b", "Gloomy Glacier"),
@@ -157,10 +169,20 @@ const sceneDescs = [
     new Scene("mr4_blk", "Minigame (Blink)"),
     new Scene("mr4_spx", "Minigame (Sparx)"),
     new Scene("mr4_spy", "Minigame (Spyro)"),
-    "Test Maps",
+    new Scene("r4linkbc", "Interstitial (Mount/Falls)"),
+    new Scene("r4linkcd", "Interstitial (Falls/Mine)"),
+    new Scene("r4linkde", "Interstitial (Mine/Laboratory)"),
+    "Unused Maps",
     new Scene("hogwarts", "Hogwarts"),
+    new Scene("maptest", "Map Test"),
+    new Scene("model", "Model Viewer"),
+    new Scene("playroom", "Playroom"),
+    new Scene("r1linkbc", "R1LinkBC"),
+    new Scene("shop", "Shop"),
+    new Scene("startup", "Startup"),
     new Scene("test_ab", "Test AB"),
-    new Scene("test_bch", "Test BCH"),
+    new Scene("test_bch", "Test Beach"),
+    new Scene("testbed", "Test Bed"),
     new Scene("test_dp", "Test DP"),
     new Scene("test_HN", "Test HN"),
     new Scene("test_jp", "Test JP"),
@@ -179,4 +201,4 @@ const sceneDescs = [
     new Scene("test_tl", "Test TL")
 ];
 
-export const sceneGroup: SceneGroup = { id: id, name: name, sceneDescs: sceneDescs };
+export const sceneGroup: SceneGroup = { id, name, sceneDescs };

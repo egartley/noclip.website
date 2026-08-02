@@ -1,4 +1,4 @@
-import { vec2, vec3 } from "gl-matrix";
+import { vec2, vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { AABB } from "../Geometry";
 import { HerosTailTextureFormat } from "./texture";
@@ -31,6 +31,7 @@ export interface HerosTailEntity {
 
 export interface HerosTailMap {
     placements: HerosTailPlacement[];
+    zones: HerosTailMapZone[];
 }
 
 export interface HerosTailPlacement {
@@ -39,9 +40,26 @@ export interface HerosTailPlacement {
     scale: vec3;
     flags: number;
     engineFlags: number;
-    map: number;
+    zoneIndex: number;
     entityHash: number;
     group: number;
+}
+
+export interface HerosTailMapZone {
+    refEntityIndex: number;
+    envData: HerosTailMapZoneEnvData;
+    bbox: AABB;
+}
+
+export interface HerosTailMapZoneEnvData {
+    fogNear: number;
+    fogFar: number;
+    fogMin: number;
+    fogMax: number;
+    fogMethod: number;
+    backgroundColor: vec4;
+    fogColor: vec4;
+    skyIndex: number;
 }
 
 interface CommonInfo {
@@ -71,6 +89,10 @@ export interface HerosTailMeshEntity extends HerosTailEntity, EntityBase {
 
 export interface HerosTailSplitEntity extends HerosTailEntity, EntityBase {
     subEntities: HerosTailEntity[];
+}
+
+export interface HerosTailMapZoneEntity extends HerosTailEntity, EntityBase {
+    refEntityIndex: number;
 }
 
 export enum HerosTailEntityType {
@@ -121,7 +143,7 @@ export class HerosTailParser {
         this.readSection(SectionType.UNUSED); // animation sets
         this.readSection(SectionType.UNUSED); // particles
         this.readSection(SectionType.UNUSED); // swooshes (???)
-        this.readSection(SectionType.UNUSED); // spreadsheets
+        this.readSection(SectionType.UNUSED); // spreadsheets (strings)
         this.readSection(SectionType.UNUSED); // fonts
         this.readSection(SectionType.UNUSED); // unknown
         const textures = this.readSection(SectionType.TEXTURE) as HerosTailRawTexure[];
@@ -274,6 +296,9 @@ export class HerosTailParser {
             case HerosTailEntityType.SPLIT:
                 entity = this.getSplitEntity(entity);
                 break;
+            case HerosTailEntityType.MAP_ZONE:
+                entity = this.getMapZoneEntity(entity);
+                break;
             default:
                 console.warn("Unimplemented entity type", type, "at", this.offset - 4);
                 break;
@@ -355,6 +380,13 @@ export class HerosTailParser {
         return { hash: template.hash, type: HerosTailEntityType.SPLIT, flags: base.flags, bbox: base.bbox, subEntities };
     }
 
+    private getMapZoneEntity(template: HerosTailEntity): HerosTailMapZoneEntity {
+        const base = this.getEntityBase();
+        this.offset += 4;
+        const refEntityIndex = this.getUint32();
+        return { hash: template.hash, type: HerosTailEntityType.MAP_ZONE, flags: base.flags, bbox: base.bbox, refEntityIndex };
+    }
+
     private getMaps(count: number): HerosTailMap[] {
         const maps: HerosTailMap[] = Array(count);
         for (let i = 0; i < count; i++) {
@@ -385,10 +417,15 @@ export class HerosTailParser {
         }
         this.offset = ret2;
         this.offset += 52;
-        // zones
+
+        const zoneCount = this.getUint32();
+        const zones = Array(zoneCount);
+        for (let i = 0; i < zoneCount; i++) {
+            zones[i] = this.getMapZone();
+        }
 
         this.offset = ret;
-        return { placements };
+        return { placements, zones };
     }
 
     private getPlacement(): HerosTailPlacement {
@@ -398,12 +435,51 @@ export class HerosTailParser {
         const rotation = vec3.fromValues(this.getFloat(), this.getFloat(), this.getFloat());
         const scale = vec3.fromValues(this.getFloat(), this.getFloat(), this.getFloat());
         const engineFlags = this.getUshort();
-        const map = this.getUshort();
+        const zoneIndex = this.getUshort();
         const entityHash = this.getUint32();
         this.offset += 2;
         const group = this.getShort();
         this.offset += 4;
-        return { position, rotation, scale, flags, engineFlags, map, entityHash, group };
+
+        return { position, rotation, scale, flags, engineFlags, zoneIndex, entityHash, group };
+    }
+
+    private getMapZone(): HerosTailMapZone {
+        const refEntityIndex = this.getUint32();
+        const ret = this.offset + 4;
+        this.offset = this.offset + this.getUint32();
+        const envData = this.getEnvData();
+        this.offset = ret;
+        this.offset += 88;
+        const xyz = Array(6);
+        for (let i = 0; i < xyz.length; i++) {
+            xyz[i] = this.getFloat();
+        }
+        const bbox = new AABB(xyz[0], xyz[1], xyz[2], xyz[3], xyz[4], xyz[5]);
+        this.offset += 12;
+
+        return { refEntityIndex, envData, bbox };
+    }
+
+    private getEnvData(): HerosTailMapZoneEnvData {
+        const fogNear = this.getFloat();
+        const fogFar = this.getFloat();
+        const fogMin = this.getFloat();
+        const fogMax = this.getFloat();
+        const fogMethod = this.getUint32();
+        this.offset += 20;
+        const backgroundColor = vec4.fromValues(this.getByte(), this.getByte(), this.getByte(), this.getByte());
+        const fogColor = vec4.fromValues(this.getByte(), this.getByte(), this.getByte(), this.getByte());
+        this.offset += 8;
+        const skyIndex = this.getInt32();
+
+        return { fogNear, fogFar, fogMin, fogMax, fogMethod, backgroundColor, fogColor, skyIndex };
+    }
+
+    private getInt32(): number {
+        const n = this.view.getInt32(this.offset, true);
+        this.offset += 4;
+        return n;
     }
 
     private getUint32(): number {
