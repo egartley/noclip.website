@@ -16,6 +16,7 @@ import { computeViewMatrix, computeViewMatrixSkybox } from "../Camera";
 import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
+import { AABB } from "../Geometry";
 
 // Shared code between DDD and BBS, herein prefixed with "Lux"
 // Credit to OOT3D for the basis of the skeletal animation code
@@ -85,6 +86,7 @@ export interface LuxModel {
 
 export interface LuxModelInstance {
     shiftMatrix: mat4;
+    bbox: AABB;
     setId: number;
 }
 
@@ -444,7 +446,7 @@ export class LuxShapeRenderer implements Destroyable {
 export class LuxModelRenderer implements Destroyable, Layer {
     public visible: boolean = true;
     public instances: LuxModelInstance[] = [];
-    protected bboxPoints: Float32Array;
+    public bbox: AABB;
     protected shapes: LuxShapeRenderer[];
     protected hasTXA: boolean;
     protected isBillboard: boolean;
@@ -492,11 +494,11 @@ export class LuxModelRenderer implements Destroyable, Layer {
             this.preComputeBoneMatrices();
         }
 
+        let min = { x: Infinity, y: Infinity, z: Infinity };
+        let max = { x: -Infinity, y: -Infinity, z: -Infinity };
         // manually calculate the bbox for objects
         // some of the bboxes provided by the game are either too big or stuck at world origin
         if (calcBbox) {
-            let min = { x: Infinity, y: Infinity, z: Infinity };
-            let max = { x: -Infinity, y: -Infinity, z: -Infinity };
             for (let i = 0; i < allVertices.length; i += 3) {
                 min.x = Math.min(min.x, allVertices[i]);
                 min.y = Math.min(min.y, allVertices[i + 1]);
@@ -511,20 +513,17 @@ export class LuxModelRenderer implements Destroyable, Layer {
             max.x *= model.scale;
             max.y *= model.scale;
             max.z *= model.scale;
-            // convert from pseudo aabb to box points like the game has them in
-            this.bboxPoints = new Float32Array([
-                min.x, min.y, min.z, 0,
-                max.x, min.y, min.z, 0,
-                min.x, max.y, min.z, 0,
-                max.x, max.y, min.z, 0,
-                min.x, min.y, max.z, 0,
-                max.x, min.y, max.z, 0,
-                min.x, max.y, max.z, 0,
-                max.x, max.y, max.z, 0
-            ]);
         } else {
-            this.bboxPoints = new Float32Array(model.bbox);
+            for (let i = 0; i < 32; i += 4) {
+                min.x = Math.min(min.x, model.bbox[i]);
+                min.y = Math.min(min.y, model.bbox[i + 1]);
+                min.z = Math.min(min.z, model.bbox[i + 2]);
+                max.x = Math.max(max.x, model.bbox[i]);
+                max.y = Math.max(max.y, model.bbox[i + 1]);
+                max.z = Math.max(max.z, model.bbox[i + 2]);
+            }
         }
+        this.bbox = new AABB(min.x, min.y, min.z, max.x, max.y, max.z);
     }
 
     public prepareToRender(device: GfxDevice, renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, selectedSets: number[]) {
@@ -538,8 +537,7 @@ export class LuxModelRenderer implements Destroyable, Layer {
             }
 
             if (!this.isSkybox) {
-                mat4.mul(SCRATCH_MVP, viewerInput.camera.clipFromWorldMatrix, instance.shiftMatrix);
-                if (!this.inView(this.bboxPoints, SCRATCH_MVP)) {
+                if (!viewerInput.camera.frustum.contains(instance.bbox)) {
                     continue;
                 }
             }
@@ -593,30 +591,6 @@ export class LuxModelRenderer implements Destroyable, Layer {
         for (const shape of this.shapes) {
             shape.destroy(device);
         }
-    }
-
-    private inView(bbox: Float32Array, m: ReadonlyMat4): boolean {
-        // cheaper frustum culling than with aabb, and data has bbox in points anyway
-        const planes = [
-            [m[3] + m[0], m[7] + m[4], m[11] + m[8], m[15] + m[12]], // left
-            [m[3] - m[0], m[7] - m[4], m[11] - m[8], m[15] - m[12]], // right
-            [m[3] + m[1], m[7] + m[5], m[11] + m[9], m[15] + m[13]], // bottom
-            [m[3] - m[1], m[7] - m[5], m[11] - m[9], m[15] - m[13]], // top
-            [m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]], // near
-            [m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]], // far
-        ];
-        for (let i = 0; i < 6; i++) {
-            let pointsOutOfView = 0;
-            for (let j = 0; j < 32; j += 4) {
-                if (planes[i][0] * bbox[j] + planes[i][1] * bbox[j + 1] + planes[i][2] * bbox[j + 2] + planes[i][3] < 0) {
-                    pointsOutOfView++;
-                }
-            }
-            if (pointsOutOfView === 8) {
-                return false;
-            }
-        }
-        return true;
     }
 
     protected preComputeBoneMatrices() {
