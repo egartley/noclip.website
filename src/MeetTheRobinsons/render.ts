@@ -5,11 +5,10 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
-import { GeometryChunk } from "./bin";
+import { WilburGeometryChunk } from "./bin";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 import { Texture } from "./bin_texture";
-import { Vertex } from "./bin_geom";
 
 export class LevelProgram extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -51,18 +50,13 @@ void main() {
 const WORLD_SCALE = 300;
 const bindingLayouts: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 0 }];
 
-function isDegenerate(v1: Vertex, v2: Vertex, v3: Vertex): boolean {
-    const isEqual = (a: Vertex, b: Vertex) => a.x === b.x && a.y === b.y && a.z === b.z;
-    return isEqual(v1, v2) || isEqual(v2, v3) || isEqual(v1, v3);
-}
-
 export class LevelRenderer {
     private indexCount: number;
     private vertexBuffer: GfxBuffer;
     private indexBuffer: GfxBuffer;
     private inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, private textures: Texture[], geometryChunks: GeometryChunk[]) {
+    constructor(cache: GfxRenderCache, private textures: Texture[], geometryChunks: WilburGeometryChunk[]) {
         const device = cache.device;
         const vertices: number[] = [];
         const indices: number[] = [];
@@ -71,17 +65,14 @@ export class LevelRenderer {
                 for (const strip of block.strips) {
                     const indexStart = vertices.length / 3;
                     const numVertices = strip.numbers[0];
-                    for (let i = 0; i < numVertices; i++) {
+                    for (let i = 0; i < numVertices * 3; i += 3) {
                         vertices.push(
-                            strip.vertices[i].x * WORLD_SCALE,
-                            strip.vertices[i].y * WORLD_SCALE,
-                            strip.vertices[i].z * WORLD_SCALE
+                            strip.vertices[i] * WORLD_SCALE,
+                            strip.vertices[i + 1] * WORLD_SCALE,
+                            strip.vertices[i + 2] * WORLD_SCALE
                         );
                     }
                     for (let i = 0; i < numVertices - 2; i++) {
-                        if (isDegenerate(strip.vertices[i], strip.vertices[i + 1], strip.vertices[i + 2])) {
-                            continue;
-                        }
                         const idx1 = indexStart + i;
                         const idx2 = indexStart + i + 1;
                         const idx3 = indexStart + i + 2;

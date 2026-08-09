@@ -5,7 +5,9 @@ export class BinaryReader {
     private pointer: number = 0;
     private decoder = new TextDecoder();
 
-    constructor(private data: DataView) { }
+    constructor(private data: DataView) {
+        
+    }
 
     getPointer() { return this.pointer; }
     setPointer(p: number) { this.pointer = p; }
@@ -40,72 +42,68 @@ export class BinaryReader {
     }
 }
 
-export enum ChunkType {
+export enum WilburChunkType {
     Texture = 917634,
     Object = 917607,
     Geometry = 917544,
     Material = 917764
 }
 
-abstract class DBLChunk {
-    constructor(reader: BinaryReader, public type: ChunkType) { this.parseData(reader); }
-    protected abstract parseData(reader: BinaryReader): void;
+interface DBLChunk {
+    type: WilburChunkType
 }
 
-export class TextureChunk extends DBLChunk {
-    private count: number;
-    private start: number;
-    private name: string;
-    private headers: TextureHeader[];
-    public textures: TextureData[];
+export interface WilburTextureChunk extends DBLChunk {
+    count: number;
+    name: string;
+    headers: TextureHeader[];
+    textures: TextureData[];
+}
 
-    protected parseData(reader: BinaryReader): void {
-        this.start = reader.getPointer();
-        this.count = reader.u32();
-        reader.padding(20);
-        this.name = reader.string(32);
-        this.headers = [];
-        this.textures = [];
-        for (let i = 0; i < this.count; i++) {
-            this.headers.push(new TextureHeader(reader));
-        }
-        for (let i = 0; i < this.count; i++) {
-            this.textures.push(new TextureData(reader, this.headers[i], this.start));
-        }
+export interface WilburGeometryChunk extends DBLChunk {
+    blocks: GeometryBlock[];
+}
+
+interface ObjectChunk extends DBLChunk {
+
+}
+
+interface MaterialChunk extends DBLChunk {
+
+}
+
+function getTextureChunk(reader: BinaryReader): WilburTextureChunk {
+    const start = reader.getPointer();
+    const count = reader.u32();
+    reader.padding(20);
+    const name = reader.string(32);
+    const headers = [];
+    const textures = [];
+    for (let i = 0; i < count; i++) {
+        headers.push(new TextureHeader(reader));
     }
-}
-
-export class GeometryChunk extends DBLChunk {
-    private start: number;
-    private blockCount: number;
-    private offsets: number[];
-    public blocks: GeometryBlock[];
-
-    protected parseData(reader: BinaryReader): void {
-        this.start = reader.getPointer();
-        this.blockCount = reader.u16();
-        reader.padding(2);
-        this.offsets = [];
-        for (let i = 0; i < this.blockCount; i++) {
-            this.offsets.push(reader.u32());
-        }
-        this.blocks = [];
-        for (let i = 0; i < this.blockCount; i++) {
-            const offset = this.offsets[i];
-            this.blocks.push(new GeometryBlock(reader, this.start + offset));
-        }
+    for (let i = 0; i < count; i++) {
+        textures.push(new TextureData(reader, headers[i], start));
     }
+    return { type: WilburChunkType.Texture, count, name, headers, textures };
 }
 
-class ObjectChunk extends DBLChunk {
-    protected parseData(reader: BinaryReader): void { }
+function getGeometryChunk(reader: BinaryReader): WilburGeometryChunk {
+    const start = reader.getPointer();
+    const blockCount = reader.u16();
+    reader.padding(2);
+    const offsets = [];
+    for (let i = 0; i < blockCount; i++) {
+        offsets.push(reader.u32());
+    }
+    const blocks = [];
+    for (let i = 0; i < blockCount; i++) {
+        blocks.push(new GeometryBlock(reader, start + offsets[i]));
+    }
+    return { type: WilburChunkType.Geometry, blocks };
 }
 
-class MaterialChunk extends DBLChunk {
-    protected parseData(reader: BinaryReader): void { }
-}
-
-export class DBLFile {
+export class WilburDBLFile {
     public chunks: DBLChunk[];
 
     constructor(data: DataView) {
@@ -121,12 +119,21 @@ export class DBLFile {
             reader.padding(56);
             const chunkStart = reader.getPointer();
 
-            let chunk = null;
-            switch (typeId as ChunkType) {
-                case ChunkType.Texture: chunk = new TextureChunk(reader, ChunkType.Texture); break;
-                case ChunkType.Object: chunk = new ObjectChunk(reader, ChunkType.Object); break;
-                case ChunkType.Geometry: chunk = new GeometryChunk(reader, ChunkType.Geometry); break;
-                case ChunkType.Material: chunk = new MaterialChunk(reader, ChunkType.Material); break;
+            let chunk;
+            switch (typeId as WilburChunkType) {
+                case WilburChunkType.Texture:
+                    chunk = getTextureChunk(reader);
+                    break;
+                case WilburChunkType.Geometry:
+                    chunk = getGeometryChunk(reader);
+                    break;
+                case WilburChunkType.Object:
+                case WilburChunkType.Material:
+                    chunk = { type: typeId as WilburChunkType };
+                    break;
+                default:
+                    console.warn("Unimplemented chunk type", typeId);
+                    break;
             }
             if (chunk) {
                 this.chunks.push(chunk);
@@ -137,7 +144,7 @@ export class DBLFile {
     }
 }
 
-export function getChunksByType(dbl: DBLFile, ...types: ChunkType[]): DBLChunk[] {
+export function getWilburChunksByType(dbl: WilburDBLFile, ...types: WilburChunkType[]): DBLChunk[] {
     const chunks: DBLChunk[] = [];
     for (const chunk of dbl.chunks) {
         if (types.includes(chunk.type)) {

@@ -1,8 +1,9 @@
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
-import { BinaryReader, ChunkType, DBLFile, TextureChunk } from "./bin";
+import { BinaryReader, WilburChunkType, WilburDBLFile, WilburTextureChunk } from "./bin";
 
 export class Texture {
     public gfxTexture: GfxTexture;
+
     constructor(device: GfxDevice, public rgba: Uint8Array, public width: number, public height: number, public name: string) {
         const gfxTexture = device.createTexture({
             width, height,
@@ -12,16 +13,17 @@ export class Texture {
             depthOrArrayLayers: 1,
             numLevels: 1
         });
+        device.setResourceName(gfxTexture, name);
         device.uploadTextureData(gfxTexture, 0, [rgba]);
         this.gfxTexture = gfxTexture;
     }
 }
 
-export function buildTextures(device: GfxDevice, dblFile: DBLFile): Texture[] {
+export function buildTextures(device: GfxDevice, dblFile: WilburDBLFile): Texture[] {
     const textures: Texture[] = [];
     for (const chunk of dblFile.chunks) {
-        if (chunk.type == ChunkType.Texture) {
-            const t = chunk as TextureChunk;
+        if (chunk.type == WilburChunkType.Texture) {
+            const t = chunk as WilburTextureChunk;
             for (const texture of t.textures) {
                 textures.push(new Texture(device, texture.rgba, texture.header.width, texture.header.height, texture.header.name));
             }
@@ -57,9 +59,23 @@ export class TextureHeader {
         this.name = reader.string(32).split("\\").slice(-1)[0].split(".")[0];
         switch (this.type) {
             // need to add type 2
-            case 8: this.pixelByte = 0.5; this.paletteByte = 4; break;
-            case 9: this.pixelByte = 1; this.paletteByte = 4; break;
-            case 28: this.pixelByte = 4; this.paletteByte = 0; break;
+            case 8:
+                this.pixelByte = 0.5;
+                this.paletteByte = 4;
+                break;
+            case 9:
+                this.pixelByte = 1;
+                this.paletteByte = 4;
+                break;
+            case 28:
+                this.pixelByte = 4;
+                this.paletteByte = 0;
+                break;
+            default:
+                console.warn("Unimplemented texture type", this.type);
+                this.pixelByte = 1;
+                this.paletteByte = 1;
+                break;
         }
     }
 }
@@ -110,6 +126,8 @@ export class TextureData {
                 pixels.push(clut[index2].r, clut[index2].g, clut[index2].b, 255);
             }
             this.rgba = new Uint8Array(pixels);
+        } else {
+            this.rgba = new Uint8Array();
         }
     }
 }

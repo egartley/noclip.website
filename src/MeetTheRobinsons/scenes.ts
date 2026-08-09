@@ -7,11 +7,9 @@ import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
 import { Texture as ViewerTexture } from "../viewer.js";
-import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
-import { ChunkType, DBLFile, GeometryChunk, getChunksByType } from "./bin.js";
-import { buildTextures, Texture } from "./bin_texture.js";
-import ArrayBufferSlice from "../ArrayBufferSlice.js";
+import { WilburChunkType, WilburDBLFile, WilburGeometryChunk, getWilburChunksByType } from "./bin.js";
+import { buildTextures } from "./bin_texture.js";
 
 export class WilburRenderer implements SceneGfx {
     public textureHolder: TextureHolder;
@@ -19,15 +17,15 @@ export class WilburRenderer implements SceneGfx {
     private renderInstListMain = new GfxRenderInstList();
     private levelRenderer: LevelRenderer;
 
-    constructor(device: GfxDevice, dbl: DBLFile) {
+    constructor(device: GfxDevice, dbl: WilburDBLFile) {
         const viewerTextures: ViewerTexture[] = [];
         const textures = buildTextures(device, dbl);
         for (let i = 0; i < textures.length; i++) {
-            viewerTextures.push(convertToViewerTexture(textures[i].name, textures[i]));
+            viewerTextures.push({ gfxTexture: textures[i].gfxTexture });
         }
         this.textureHolder = new FakeTextureHolder(viewerTextures);
         this.renderHelper = new GfxRenderHelper(device);
-        this.levelRenderer = new LevelRenderer(this.renderHelper.renderCache, textures, getChunksByType(dbl, ChunkType.Geometry) as GeometryChunk[]);
+        this.levelRenderer = new LevelRenderer(this.renderHelper.renderCache, textures, getWilburChunksByType(dbl, WilburChunkType.Geometry) as WilburGeometryChunk[]);
     }
 
     protected prepareToRender(device: GfxDevice, viewerInput: ViewerRenderInput): void {
@@ -54,7 +52,7 @@ export class WilburRenderer implements SceneGfx {
         this.renderHelper.antialiasingSupport.pushPasses(builder, viewerInput, mainColorTargetID);
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
     }
 
@@ -75,15 +73,9 @@ class WilburScene implements SceneDesc {
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
         const file = await context.dataFetcher.fetchData(`${pathBase}/WEAPONS/MAGNETIZER.DBL`);
-        const dblFile = new DBLFile(file.createDataView());
+        const dblFile = new WilburDBLFile(file.createDataView());
         return new WilburRenderer(device, dblFile);
     }
-}
-
-function convertToViewerTexture(name: string, texture: Texture): ViewerTexture {
-    const canvas = convertToCanvas(ArrayBufferSlice.fromView(texture.rgba), texture.width, texture.height);
-    canvas.title = name;
-    return { name, surfaces: [canvas] };
 }
 
 const id = "Wilbur";
