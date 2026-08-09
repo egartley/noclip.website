@@ -249,7 +249,7 @@ class KatamariDamacyRenderer implements Viewer.SceneGfx {
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, this.sceneTexture.getTextureForResolving());
 
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
 
         if (this.motionCache !== null && this.drawPaths) {
@@ -267,11 +267,11 @@ class KatamariDamacyRenderer implements Viewer.SceneGfx {
         return offs;
     }
 
-    public deserializeSaveState(src: ArrayBuffer, offs: number, byteLength: number): number {
-        const view = new DataView(src);
-        if (offs < byteLength)
+    public deserializeSaveState(src: ArrayBufferSlice): void {
+        const view = src.createDataView();
+        let offs = view.byteOffset;
+        if (offs < view.byteLength)
             this.setCurrentAreaNo(view.getUint8(offs++));
-        return offs;
     }
 
     public prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {

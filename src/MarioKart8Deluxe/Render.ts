@@ -7,11 +7,10 @@ import { GfxBindingLayoutDescriptor, GfxBlendFactor, GfxBlendMode, GfxBuffer, Gf
 import { mat4, ReadonlyMat4, vec2, vec3, vec4 } from 'gl-matrix';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
 import { computeViewSpaceDepthFromWorldSpaceAABB } from '../Camera.js';
-import { surfaceToCanvas } from '../Common/bc_texture.js';
 import { FMAT, FMAT_RenderInfo, FMAT_RenderInfoType, FMAT_ShaderParam, FMDL, FRES, FSHP, FSHP_Mesh, FVTX, FVTX_VertexAttribute, FVTX_VertexBuffer, parseFMAT_ShaderParam_Color3, parseFMAT_ShaderParam_Float, parseFMAT_ShaderParam_Float2, parseFMAT_ShaderParam_Float4, parseFMAT_ShaderParam_Texsrt } from '../fres_nx/bfres.js';
 import * as BNTX from '../fres_nx/bntx.js';
 import { AttributeFormat, FilterMode, getChannelFormat, getTypeFormat, IndexFormat, TextureAddressMode } from '../fres_nx/nngfx_enum.js';
-import { decompress, deswizzle, getImageFormatString, translateImageFormat } from '../fres_nx/tegra_texture.js';
+import { decompress, deswizzleMips, getImageFormatString, translateImageFormat } from '../fres_nx/tegra_texture.js';
 import { AABB } from '../Geometry.js';
 import { GfxShaderLibrary, glslGenerateFloat } from '../gfx/helpers/GfxShaderLibrary.js';
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
@@ -51,33 +50,28 @@ export class BRTITextureHolder extends TextureHolder {
             return;
 
         const gfxTexture = device.createTexture(makeTextureDescriptor2D(translateImageFormat(textureEntry.imageFormat), textureEntry.width, textureEntry.height, textureEntry.textureDataArray[0].mipBuffers.length));
-        const canvases: HTMLCanvasElement[] = [];
 
         const channelFormat = getChannelFormat(textureEntry.imageFormat);
+
+        const deswizzledMips = deswizzleMips(textureEntry.width, textureEntry.height, channelFormat, textureEntry.textureDataArray[0]);
 
         for (let i = 0; i < textureEntry.textureDataArray[0].mipBuffers.length; i++) {
             const mipLevel = i;
 
-            const buffer = textureEntry.textureDataArray[0].mipBuffers[i];
+            const deswizzled = deswizzledMips[mipLevel];
             const width = Math.max(textureEntry.width >>> mipLevel, 1);
             const height = Math.max(textureEntry.height >>> mipLevel, 1);
             const depth = 1;
-            const blockHeightLog2 = textureEntry.blockHeightLog2;
-            deswizzle({ buffer, width, height, channelFormat, blockHeightLog2 }).then((deswizzled) => {
-                const rgbaTexture = decompress({ ...textureEntry, width, height, depth }, deswizzled);
-                const rgbaPixels = rgbaTexture.pixels;
-                device.uploadTextureData(gfxTexture, mipLevel, [rgbaPixels]);
-    
-                const canvas = document.createElement('canvas');
-                surfaceToCanvas(canvas, rgbaTexture);
-                canvases.push(canvas);
-            });
+
+            const rgbaTexture = decompress({ ...textureEntry, width, height, depth }, deswizzled);
+            const rgbaPixels = rgbaTexture.pixels;
+            device.uploadTextureData(gfxTexture, mipLevel, [rgbaPixels]);
         }
 
         const extraInfo = new Map<string, string>();
         extraInfo.set('Format', getImageFormatString(textureEntry.imageFormat));
 
-        const viewerTexture: Viewer.Texture = { name: textureEntry.name, surfaces: canvases, extraInfo };
+        const viewerTexture: Viewer.Texture = { gfxTexture, extraInfo };
         this.gfxTextures.push(gfxTexture);
         this.viewerTextures.push(viewerTexture);
         this.textureNames.push(textureEntry.name);
@@ -97,7 +91,7 @@ function translateAddressMode(addrMode: TextureAddressMode): GfxWrapMode {
         // TODO(jstpierre): This requires GL_ARB_texture_mirror_clamp_to_edge
         return GfxWrapMode.Mirror;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -109,7 +103,7 @@ function translateMipFilterMode(filterMode: FilterMode): GfxMipFilterMode {
     case FilterMode.Point:
         return GfxMipFilterMode.Nearest;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -120,7 +114,7 @@ function translateTexFilterMode(filterMode: FilterMode): GfxTexFilterMode {
     case FilterMode.Point:
         return GfxTexFilterMode.Point;
     default:
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -897,7 +891,7 @@ ${this.generateAlphaTest()}
         case GfxCompareMode.NotEqual:     return `t_PixelOut.a != ${ref}`;
         case GfxCompareMode.GreaterEqual: return `t_PixelOut.a >= ${ref}`;
         case GfxCompareMode.Always:       return `true`;
-        default: throw "whoops";
+        default: throw new Error("whoops");
         }
     }
 
@@ -933,7 +927,7 @@ function getRenderInfoBoolean(renderInfo: FMAT_RenderInfo): boolean {
     else if (value === 'false' || value === '0')
         return false;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateCullMode(fmat: FMAT): GfxCullMode | null {
@@ -947,7 +941,7 @@ function translateCullMode(fmat: FMAT): GfxCullMode | null {
     else if (display_face === 'none')
         return null;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateDepthWrite(fmat: FMAT): boolean {
@@ -963,7 +957,7 @@ function getRenderInfoCompareMode(renderInfo: FMAT_RenderInfo): GfxCompareMode {
     else if (value === 'greater')
         return GfxCompareMode.Greater;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateDepthCompare(fmat: FMAT): GfxCompareMode {
@@ -979,7 +973,7 @@ function getRenderInfoBlendMode(renderInfo: FMAT_RenderInfo): GfxBlendMode {
     if (value === 'add')
         return GfxBlendMode.Add;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateRenderInfoBlendFactor(renderInfo: FMAT_RenderInfo): GfxBlendFactor {
@@ -993,7 +987,7 @@ function translateRenderInfoBlendFactor(renderInfo: FMAT_RenderInfo): GfxBlendFa
     else if (value === 'zero')
         return GfxBlendFactor.Zero;
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function findShaderParam(fmat: FMAT, name: string): FMAT_ShaderParam {
@@ -1077,7 +1071,7 @@ function createShaderProgram(fmat: FMAT): DeviceProgram {
     if (shaderAssign.shadingModelName === 'turbo_uber' || shaderAssign.shadingModelName === 'turbo_uber_xlu')
         return new TurboUBER(fmat);
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 class FMATInstance {
@@ -1181,7 +1175,7 @@ class FMATInstance {
         } else if (blendMode === 'none') {
             // Nothing.
         } else {
-            throw "whoops";
+            throw new Error("whoops");
         }
 
         const pass = getRenderInfoSingleString(fmat.renderInfo.get('gsys_pass')!);
@@ -1225,7 +1219,7 @@ class FMATInstance {
         } else if (render_state_mode === 'translucent') {
             this.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT, programKey);
         } else {
-            throw "whoops";
+            throw new Error("whoops");
         }
 
         parseFMAT_ShaderParam_Texsrt(this.texCoordSRT0, findShaderParam(fmat, 'tex_mtx0'));
@@ -1311,7 +1305,7 @@ function translateAttributeFormat(attributeFormat: AttributeFormat): GfxFormat {
         return GfxFormat.F32_RGB;
     default:
         console.error(getChannelFormat(attributeFormat), getTypeFormat(attributeFormat));
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 
@@ -1467,7 +1461,7 @@ function translateIndexFormat(indexFormat: IndexFormat): GfxFormat {
     case IndexFormat.Uint8:  return GfxFormat.U8_R;
     case IndexFormat.Uint16: return GfxFormat.U16_R;
     case IndexFormat.Uint32: return GfxFormat.U32_R;
-    default: throw "whoops";
+    default: throw new Error("whoops");
     }
 }
 
@@ -1697,7 +1691,7 @@ export class TurboLightEnv {
             vec3.negate(scratchVec3, hemiLight.Direction);
             offs += fillVec3v(d, offs, scratchVec3);
         } else {
-            throw "whoops";
+            throw new Error("whoops");
         }
 
         return offs - baseOffs;
@@ -1785,7 +1779,7 @@ export class TurboRenderer {
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
 
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
     }
 

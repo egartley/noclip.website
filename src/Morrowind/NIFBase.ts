@@ -236,7 +236,7 @@ function translateAlphaFunction(mode: NIFParse.AlphaFunction): GfxBlendFactor {
     case NIFParse.AlphaFunction.DEST_ALPHA: return GfxBlendFactor.DstAlpha;
     case NIFParse.AlphaFunction.INV_DEST_ALPHA: return GfxBlendFactor.OneMinusDstAlpha;
     case NIFParse.AlphaFunction.SRC_ALPHA_SATURATE: return GfxBlendFactor.Src; // ???
-    default: throw "whoops";
+    default: throw new Error("whoops");
     }
 }
 
@@ -250,7 +250,7 @@ function translateTestFunction(mode: NIFParse.TestFunction): GfxCompareMode {
     case NIFParse.TestFunction.TEST_NOT_EQUAL: return GfxCompareMode.NotEqual;
     case NIFParse.TestFunction.TEST_GREATER_EQUAL: return GfxCompareMode.GreaterEqual;
     case NIFParse.TestFunction.TEST_NEVER: return GfxCompareMode.Never;
-    default: throw "whoops";
+    default: throw new Error("whoops");
     }
 }
 
@@ -292,13 +292,13 @@ layout(std140) uniform ub_ObjectParams {
     vec4 u_EmissiveColor;
 };
 
-layout(location = 0) uniform sampler2D u_TextureBase;
-layout(location = 1) uniform sampler2D u_TextureDark;
-layout(location = 2) uniform sampler2D u_TextureDetail;
-layout(location = 3) uniform sampler2D u_TextureGloss;
-layout(location = 4) uniform sampler2D u_TextureGlow;
-layout(location = 5) uniform sampler2D u_TextureBump;
-layout(location = 6) uniform sampler2D u_TextureDecal;
+layout(binding = 0) uniform sampler2D u_TextureBase;
+layout(binding = 1) uniform sampler2D u_TextureDark;
+layout(binding = 2) uniform sampler2D u_TextureDetail;
+layout(binding = 3) uniform sampler2D u_TextureGloss;
+layout(binding = 4) uniform sampler2D u_TextureGlow;
+layout(binding = 5) uniform sampler2D u_TextureBump;
+layout(binding = 6) uniform sampler2D u_TextureDecal;
 
 #if USE_INSTANCING()
 layout(std140) uniform ub_InstanceParams {

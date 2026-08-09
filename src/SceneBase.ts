@@ -5,6 +5,7 @@ import { DataFetcher } from "./DataFetcher.js";
 import { DataShare } from "./DataShare.js";
 import { GfxRenderInstManager } from "./gfx/render/GfxRenderInstManager.js";
 import InputManager from "./InputManager.js";
+import { SaveState } from "./SaveState.js";
 
 export interface ProgressMeter {
     setProgress(progress: number): void;
@@ -19,6 +20,10 @@ export interface GraphObjBase extends Destroyable {
     prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: ViewerRenderInput): void;
 }
 
+export interface SceneLoader {
+    loadSceneById(sceneGroup: string, sceneId: string, saveState: SaveState | null): void;
+}
+
 export interface SceneContext {
     device: GfxDevice;
     dataFetcher: DataFetcher;
@@ -27,6 +32,7 @@ export interface SceneContext {
     destroyablePool: Destroyable[];
     inputManager: InputManager;
     viewerInput: ViewerRenderInput;
+    sceneLoader: SceneLoader;
     initialSceneTime: number;
 }
 

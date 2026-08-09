@@ -70,8 +70,8 @@ layout(std140) uniform ub_BaseData {
     vec4 u_Misc[1];
 };
 
-layout(location = 0) uniform sampler2D u_TextureFramebufferDepth;
-layout(location = 1) uniform sampler2DArray u_TextureFont;
+layout(binding = 0) uniform sampler2D u_TextureFramebufferDepth;
+layout(binding = 1) uniform sampler2DArray u_TextureFont;
 
 #define u_ScreenSize (u_Misc[0].xy)
 
@@ -142,8 +142,8 @@ in vec4 v_Color;
 in vec3 v_TexCoord;
 flat in uint v_Flags;
 
-layout(location = 0) uniform sampler2D u_TextureFramebufferDepth;
-layout(location = 1) uniform sampler2DArray u_TextureFont;
+layout(binding = 0) uniform sampler2D u_TextureFramebufferDepth;
+layout(binding = 1) uniform sampler2DArray u_TextureFont;
 
 bool IsSomethingInFront(float t_DepthSample) {
     if (t_DepthSample ${IsDepthReversed ? `>` : `<`} gl_FragCoord.z)
@@ -757,7 +757,7 @@ export class DebugDraw {
         });
     }
 
-    public drawWorldTextMtx(str: string, mtx: mat4, color: Readonly<Color>, options: DebugDrawOptions = defaultOptions): void {
+    public drawWorldTextMtx(str: string, mtx: ReadonlyMat4, color: Readonly<Color>, options: DebugDrawOptions = defaultOptions): void {
         options = setFlags(options, DebugDrawFlags.WorldSpace);
         const flags = options.flags!;
         const space = flags & SpaceMask;
@@ -765,14 +765,18 @@ export class DebugDraw {
             const a = this.viewFromWorldMatrix;
             const m10 = a[8] * mtx[2] + a[9] * mtx[6] + a[10] * mtx[10];
             if (m10 < 0.0) {
-                // Reverse the front/right axes, but keep up the same.
-                mtx[0] *= -1;
-                mtx[1] *= -1;
-                mtx[2] *= -1;
+                mat4.copy(DebugDraw.scratchMat4, mtx);
 
-                mtx[8] *= -1;
-                mtx[9] *= -1;
-                mtx[10] *= -1;
+                // Reverse the front/right axes, but keep up the same.
+                DebugDraw.scratchMat4[0] *= -1;
+                DebugDraw.scratchMat4[1] *= -1;
+                DebugDraw.scratchMat4[2] *= -1;
+
+                DebugDraw.scratchMat4[8] *= -1;
+                DebugDraw.scratchMat4[9] *= -1;
+                DebugDraw.scratchMat4[10] *= -1;
+
+                mtx = DebugDraw.scratchMat4;
             }
         }
         this.drawTextMtx(mtx, str, color, options);
@@ -780,8 +784,15 @@ export class DebugDraw {
 
     public drawWorldTextRU(str: string, p: ReadonlyVec3, color: Readonly<Color>, right: ReadonlyVec3 = Vec3UnitX, up: ReadonlyVec3 = Vec3UnitY, options: DebugDrawOptions = defaultOptions): void {
         const mtx = DebugDraw.scratchMat4;
-        vec3.cross(DebugDraw.scratchVec3[0], up, right);
+        vec3.cross(DebugDraw.scratchVec3[0], right, up);
         setMatrixAxis(mtx, right, up, DebugDraw.scratchVec3[0]);
+        setMatrixTranslation(mtx, p);
+        this.drawWorldTextMtx(str, mtx, color, options);
+    }
+
+    public drawWorldText(str: string, p: ReadonlyVec3, color: Readonly<Color>, options: DebugDrawOptions = defaultOptions): void {
+        const mtx = DebugDraw.scratchMat4;
+        mat4.invert(mtx, this.viewFromWorldMatrix);
         setMatrixTranslation(mtx, p);
         this.drawWorldTextMtx(str, mtx, color, options);
     }
@@ -825,8 +836,8 @@ export class DebugDraw {
                     const depthTexture = depthResolveTextureID !== null ? scope.getResolveTextureForID(depthResolveTextureID) : null;
                     const fontTexture = page.fontTexture !== null ? page.fontTexture.gfxTexture : null;
                     page.renderInst.setSamplerBindings(0, [
-                        { gfxTexture: depthTexture, gfxSampler: this.depthSampler, lateBinding: null },
-                        { gfxTexture: fontTexture, gfxSampler: this.fontSampler, lateBinding: null },
+                        { gfxTexture: depthTexture, gfxSampler: this.depthSampler },
+                        { gfxTexture: fontTexture, gfxSampler: this.fontSampler },
                     ]);
                     page.renderInst.drawOnPass(this.renderCache, passRenderer);
                 }

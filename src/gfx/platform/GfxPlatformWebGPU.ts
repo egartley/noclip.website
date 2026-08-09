@@ -106,7 +106,7 @@ function translateWrapMode(wrapMode: GfxWrapMode): GPUAddressMode {
     else if (wrapMode === GfxWrapMode.Mirror)
         return 'mirror-repeat';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateMinMagFilter(texFilter: GfxTexFilterMode): GPUFilterMode {
@@ -115,7 +115,7 @@ function translateMinMagFilter(texFilter: GfxTexFilterMode): GPUFilterMode {
     else if (texFilter === GfxTexFilterMode.Point)
         return 'nearest';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateMipFilter(mipFilter: GfxMipFilterMode): GPUFilterMode {
@@ -124,7 +124,7 @@ function translateMipFilter(mipFilter: GfxMipFilterMode): GPUFilterMode {
     else if (mipFilter === GfxMipFilterMode.Nearest)
         return 'nearest';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateTextureFormat(format: GfxFormat): GPUTextureFormat {
@@ -193,7 +193,7 @@ function translateTextureFormat(format: GfxFormat): GPUTextureFormat {
     else if (format === GfxFormat.BC7_SRGB)
         return 'bc7-rgba-unorm-srgb';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateTextureDimension(dimension: GfxTextureDimension): GPUTextureDimension {
@@ -206,7 +206,7 @@ function translateTextureDimension(dimension: GfxTextureDimension): GPUTextureDi
     else if (dimension === GfxTextureDimension.Cube)
         return '2d';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateViewDimension(dimension: GfxTextureDimension): GPUTextureViewDimension {
@@ -219,7 +219,7 @@ function translateViewDimension(dimension: GfxTextureDimension): GPUTextureViewD
     else if (dimension === GfxTextureDimension.Cube)
         return 'cube';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateTextureUsage(usage: GfxTextureUsage): GPUTextureUsageFlags {
@@ -249,7 +249,7 @@ function translateTopology(topology: GfxPrimitiveTopology): GPUPrimitiveTopology
     else if (topology === GfxPrimitiveTopology.Lines)
         return 'line-list';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateCullMode(cullMode: GfxCullMode): GPUCullMode {
@@ -260,7 +260,7 @@ function translateCullMode(cullMode: GfxCullMode): GPUCullMode {
     else if (cullMode === GfxCullMode.Back)
         return 'back';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateFrontFace(frontFaceMode: GfxFrontFaceMode): GPUFrontFace {
@@ -269,7 +269,7 @@ function translateFrontFace(frontFaceMode: GfxFrontFaceMode): GPUFrontFace {
     else if (frontFaceMode === GfxFrontFaceMode.CW)
         return 'cw';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translatePrimitiveState(topology: GfxPrimitiveTopology, megaStateDescriptor: GfxMegaStateDescriptor): GPUPrimitiveState {
@@ -306,7 +306,7 @@ function translateBlendFactor(factor: GfxBlendFactor): GPUBlendFactor {
     else if (factor === GfxBlendFactor.OneMinusConstantColor)
         return 'one-minus-constant';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateBlendMode(mode: GfxBlendMode): GPUBlendOperation {
@@ -317,7 +317,7 @@ function translateBlendMode(mode: GfxBlendMode): GPUBlendOperation {
     else if (mode === GfxBlendMode.ReverseSubtract)
         return 'reverse-subtract';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateBlendComponent(ch: GfxChannelBlendState): GPUBlendComponent {
@@ -384,7 +384,7 @@ function translateCompareMode(compareMode: GfxCompareMode): GPUCompareFunction {
     else if (compareMode === GfxCompareMode.Always)
         return 'always';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateDepthStencilState(format: GfxFormat | null, megaStateDescriptor: GfxMegaStateDescriptor): GPUDepthStencilState | undefined {
@@ -409,7 +409,7 @@ function translateIndexFormat(format: GfxFormat | null): GPUIndexFormat | undefi
     else if (format === GfxFormat.U32_R)
         return 'uint32';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateVertexFormat(format: GfxFormat): GPUVertexFormat {
@@ -417,8 +417,6 @@ function translateVertexFormat(format: GfxFormat): GPUVertexFormat {
         return 'uint8x2';
     else if (format === GfxFormat.U8_RG)
         return 'uint8x2';
-    else if (format === GfxFormat.U8_RGB)
-        return 'uint8x4';
     else if (format === GfxFormat.U8_RGBA)
         return 'uint8x4';
     else if (format === GfxFormat.U8_RG_NORM)
@@ -462,14 +460,14 @@ function translateVertexFormat(format: GfxFormat): GPUVertexFormat {
     else if (format === GfxFormat.F32_RGBA)
         return 'float32x4';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateQueryPoolType(type: GfxQueryPoolType): GPUQueryType {
     if (type === GfxQueryPoolType.OcclusionConservative)
         return 'occlusion';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateSampleType(type: GfxSamplerFormatKind): GPUTextureSampleType {
@@ -480,7 +478,7 @@ function translateSampleType(type: GfxSamplerFormatKind): GPUTextureSampleType {
     else if (type === GfxSamplerFormatKind.Depth)
         return 'depth';
     else
-        throw "whoops";
+        throw new Error("whoops");
 }
 
 function translateBindGroupTextureBinding(sampler: GfxBindingLayoutSamplerDescriptor): GPUTextureBindingLayout {
@@ -734,6 +732,12 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
         this.gpuRenderPassEncoder!.drawIndexed(indexCount, 1, firstIndex, 0, 0);
         this._debugGroupStatisticsDrawCall();
         this._debugGroupStatisticsTriangles(indexCount / 3);
+    }
+
+    public drawInstanced(vertexCount: number, firstVertex: number, instanceCount: number): void {
+        this.gpuRenderPassEncoder!.draw(vertexCount, instanceCount, firstVertex, 0);
+        this._debugGroupStatisticsDrawCall();
+        this._debugGroupStatisticsTriangles((vertexCount / 3) * instanceCount);
     }
 
     public drawIndexedInstanced(indexCount: number, firstIndex: number, instanceCount: number): void {
@@ -1298,7 +1302,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         else if (dimension === GfxTextureDimension.Cube)
             return this._fallbackTextureCube;
         else
-            throw "whoops";
+            throw new Error("whoops");
     }
 
     private _getFallbackSampler(samplerEntry: GfxBindingLayoutSamplerDescriptor): GfxSampler {
@@ -1551,7 +1555,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
     public createWebXRLayer(webXRSession: XRSession): Promise<XRWebGLLayer> {
         // There is currently no way to use WebGPU with WebXR.
         // This method should never be called.
-        throw "createWebXRLayer not implemented on WebGPU";
+        throw new Error("createWebXRLayer not implemented on WebGPU");
     }
 
     public destroyBuffer(o: GfxBuffer): void {
@@ -1735,7 +1739,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         this._frameCommandEncoder!.copyTextureToTexture(srcCopy, dstCopy, [src.width, src.height, 1]);
     }
 
-    public copyCanvasToTexture(dst_: GfxTexture, dstZ: number, src: HTMLCanvasElement): void {
+    public copyExternalImageToTexture(dst_: GfxTexture, dstZ: number, src: HTMLCanvasElement | ImageBitmap): void {
         const dst = dst_ as GfxTextureP_WebGPU;
         assert(!!(dst.usage & GPUTextureUsage.COPY_DST));
         assert(dst.width === src.width);
@@ -1831,7 +1835,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         return queryPool.results[dstOffs] !== BigInt(0);
     }
 
-    public queryLimits(): GfxDeviceLimits {
+    public queryLimits(): Readonly<GfxDeviceLimits> {
         return {
             uniformBufferMaxPageByteSize: this.device.limits.maxUniformBufferBindingSize,
             uniformBufferByteAlignment: this.device.limits.minUniformBufferOffsetAlignment,
@@ -1863,7 +1867,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         return true;
     }
 
-    public queryVendorInfo(): GfxVendorInfo {
+    public queryVendorInfo(): Readonly<GfxVendorInfo> {
         return this;
     }
 

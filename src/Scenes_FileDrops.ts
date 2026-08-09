@@ -10,7 +10,7 @@ import * as CX from './Common/Compression/CX.js';
 import * as Grezzo3DS from './OcarinaOfTime3D/scenes.js';
 import * as NNS_G3D from './nns_g3d/scenes.js';
 import * as J3D from './j3d/scenes.js';
-import * as CTR_H3D from './Common/CTR_H3D/H3D.js';
+import * as CTR_H3D from './Common/CTR/H3D.js';
 import * as RRES from './rres/scenes.js';
 import * as PaperMarioTTYD from './PaperMarioTTYD/Scenes_PaperMarioTTYD.js';
 import * as JPAExplorer from './InteractiveExamples/JPAExplorer.js';
@@ -67,7 +67,7 @@ async function loadArbitraryFile(context: SceneContext, buffer: ArrayBufferSlice
     if (magic === 'bres')
         return RRES.createBasicRRESRendererFromBRRES(device, [buffer]);
 
-    throw "whoops";
+    throw new Error("whoops");
 }
 
 export async function createSceneFromFiles(context: SceneContext, buffers: NamedArrayBufferSlice[]): Promise<SceneGfx> {
@@ -113,7 +113,7 @@ export async function createSceneFromFiles(context: SceneContext, buffers: Named
     if (buffer.name.endsWith('.bsp') || buffer.name.endsWith('.gma'))
         return SourceFileDrops.createFileDropsScene(context, buffer); 
 
-    throw "whoops";
+    throw new Error("whoops");
 }
 
 export class DroppedFileSceneDesc implements SceneDesc {
@@ -180,7 +180,7 @@ async function traverseFileSystemEntry(entry: FileSystemEntry, path: string = ''
             });
         });
     } else {
-        throw "whoops";
+        throw new Error("whoops");
     }
 }
 

@@ -170,7 +170,7 @@ export interface GfxBufferBinding {
 export interface GfxSamplerBinding {
     gfxTexture: GfxTexture | null;
     gfxSampler: GfxSampler | null;
-    lateBinding: string | null;
+    lateBinding?: string;
 }
 
 export enum GfxSamplerFormatKind {
@@ -365,6 +365,7 @@ export interface GfxRenderPass {
 
     // Draw commands.
     draw(vertexCount: number, firstVertex: number): void;
+    drawInstanced(vertexCount: number, firstVertex: number, instanceCount: number): void;
     drawIndexed(indexCount: number, firstIndex: number): void;
     drawIndexedInstanced(indexCount: number, firstIndex: number, instanceCount: number): void;
 
@@ -453,7 +454,7 @@ export interface GfxDevice {
 
     // Copying.
     copySubTexture2D(dst: GfxTexture, dstX: number, dstY: number, src: GfxTexture, srcX: number, srcY: number): void;
-    copyCanvasToTexture(dst: GfxTexture, dstZ: number, src: HTMLCanvasElement): void;
+    copyExternalImageToTexture(dst: GfxTexture, dstZ: number, src: HTMLCanvasElement | ImageBitmap): void;
 
     // Data submission
     zeroBuffer(buffer: GfxBuffer, dstByteOffset: number, byteCount: number): void;
@@ -478,9 +479,9 @@ export interface GfxDevice {
     queryPoolResultOcclusion(o: GfxQueryPool, dstOffs: number): boolean | null;
 
     // Information queries.
-    queryLimits(): GfxDeviceLimits;
+    queryLimits(): Readonly<GfxDeviceLimits>;
     queryTextureFormatSupported(format: GfxFormat, width: number, height: number): boolean;
-    queryVendorInfo(): GfxVendorInfo;
+    queryVendorInfo(): Readonly<GfxVendorInfo>;
     queryRenderPass(o: GfxRenderPass): Readonly<GfxRenderPassDescriptor>;
     queryRenderTarget(o: GfxRenderTarget): Readonly<GfxRenderTargetDescriptor>;
 

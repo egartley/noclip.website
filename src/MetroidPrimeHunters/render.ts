@@ -10,25 +10,14 @@ import { TextureMapping } from "../TextureHolder.js";
 import { fillMatrix4x3, fillMatrix4x4, fillMatrix3x2, fillVec4, fillColor } from "../gfx/helpers/UniformBufferHelpers.js";
 import { computeViewMatrix } from "../Camera.js";
 import AnimationController from "../AnimationController.js";
+import { bindMPHT, MPHAnimation, MPHTexCoordAnimator } from "./mph_anim.js";
 import { nArray, assertExists } from "../util.js";
-import { TEX0Texture, SRT0TexMtxAnimator, PAT0TexAnimator, TEX0, MDL0Model, MDL0Material, MDL0Node, MDL0Shape } from "../nns_g3d/NNS_G3D.js";
+import { TEX0Texture, PAT0TexAnimator, TEX0, MDL0Material, MDL0Node, MDL0Shape } from "../nns_g3d/NNS_G3D.js";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers.js";
 import { MPHbin } from "./mph_binModel.js";
 import { CalcBillboardFlags, calcBillboardMatrix } from "../MathHelpers.js";
-import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
-import ArrayBufferSlice from "../ArrayBufferSlice.js";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache.js";
 import { White, colorNewCopy } from "../Color.js";
-
-function textureToCanvas(bmdTex: TEX0Texture, pixels: Uint8Array, name: string): Viewer.Texture {
-    const canvas = convertToCanvas(ArrayBufferSlice.fromView(pixels), bmdTex.width, bmdTex.height);
-    canvas.title = name;
-
-    const surfaces = [ canvas ];
-    const extraInfo = new Map<string, string>();
-    extraInfo.set('Format', getFormatName(bmdTex.format));
-    return { name, surfaces, extraInfo };
-}
 
 function translateWrapMode(repeat: boolean, flip: boolean): GfxWrapMode {
     if (flip)
@@ -60,7 +49,6 @@ class MaterialInstance {
     private textureMappings: TextureMapping[] = nArray(1, () => new TextureMapping());
     public viewerTextures: Viewer.Texture[] = [];
     public baseCtx: NITRO_GX.Context;
-    public srt0Animator: SRT0TexMtxAnimator | null = null;
     public pat0Animator: PAT0TexAnimator | null = null;
     private sortKey: number;
     private megaStateFlags: Partial<GfxMegaStateDescriptor>;
@@ -70,7 +58,7 @@ class MaterialInstance {
     public specularColor = colorNewCopy(White);
     public emissionColor = colorNewCopy(White);
 
-    constructor(cache: GfxRenderCache, tex0: TEX0, private model: MDL0Model, public material: MDL0Material) {
+    constructor(cache: GfxRenderCache, tex0: TEX0, public material: MDL0Material, private texCoordAnimator: MPHTexCoordAnimator | null) {
         function expand5to8(n: number): number {
             return (n << (8 - 5)) | (n >>> (10 - 8));
         }
@@ -136,12 +124,14 @@ class MaterialInstance {
 
         device.uploadTextureData(gfxTexture, 0, [pixels]);
 
-        this.viewerTextures.push(textureToCanvas(texture, pixels, fullTextureName));
+        const extraInfo = new Map<string, string>();
+        extraInfo.set('Format', getFormatName(texture.format));
+        this.viewerTextures.push({ gfxTexture, extraInfo });
     }
 
     public setOnRenderInst(template: GfxRenderInst, viewerInput: Viewer.ViewerRenderInput): void {
-        if (this.srt0Animator !== null) {
-            this.srt0Animator.calcTexMtx(scratchTexMatrix, this.model.texMtxMode, this.material.texScaleS, this.material.texScaleT);
+        if (this.texCoordAnimator !== null) {
+            this.texCoordAnimator.calcTexMtx(scratchTexMatrix, this.material.texScaleS, this.material.texScaleT);
         } else {
             mat2d.copy(scratchTexMatrix, this.material.texMatrix);
         }
@@ -234,6 +224,36 @@ enum BillboardMode {
     NONE, BB, BBY,
 }
 
+export type MPHSceneMode =
+    { kind: 'singlePlayer', area: number } |
+    { kind: 'multiplayer', layout: 0 | 1, captureTheFlag?: boolean };
+
+function nodeIsVisibleInMode(name: string, mode: MPHSceneMode): boolean {
+    let hasModeTag = false;
+    let matchesMode = false;
+
+    // FilterModelNodesByGameModeTags @ 0x0211B004:
+    // check consecutive four-byte tags at the beginning of each node name.
+    for (let offs = 0; name.charAt(offs) === '_'; offs += 4) {
+        hasModeTag = true;
+        const tag = name.slice(offs, offs + 4).toLowerCase();
+        if (tag.startsWith('_s')) {
+            const area = Number.parseInt(tag.slice(2), 10);
+            matchesMode ||= mode.kind === 'singlePlayer' && area === mode.area;
+        } else if (tag === '_mpu') {
+            matchesMode ||= mode.kind === 'multiplayer';
+        } else if (tag === '_ml0') {
+            matchesMode ||= mode.kind === 'multiplayer' && mode.layout === 0;
+        } else if (tag === '_ml1') {
+            matchesMode ||= mode.kind === 'multiplayer' && mode.layout === 1;
+        } else if (tag === '_ctf') {
+            matchesMode ||= mode.kind === 'multiplayer' && mode.captureTheFlag === true;
+        }
+    }
+
+    return !hasModeTag || matchesMode;
+}
+
 export class MPHRenderer {
     public modelMatrix = mat4.create();
     public isSkybox: boolean = false;
@@ -245,7 +265,7 @@ export class MPHRenderer {
     private nodes: Node[] = [];
     public viewerTextures: Viewer.Texture[] = [];
 
-    constructor(device: GfxDevice, cache: GfxRenderCache, public mphModel: MPHbin, private tex0: TEX0) {
+    constructor(device: GfxDevice, cache: GfxRenderCache, public mphModel: MPHbin, private tex0: TEX0, mphAnimation: MPHAnimation | null = null, private sceneMode: MPHSceneMode = { kind: 'singlePlayer', area: 1 }) {
         const program = new NITRO_Program();
         program.defines.set('USE_VERTEX_COLOR', '1');
         program.defines.set('USE_TEXTURE', '1');
@@ -260,9 +280,14 @@ export class MPHRenderer {
         mat4.fromScaling(this.modelMatrix, [posScale, posScale, posScale]);
 
         const model = mphModel.models[0];
+        const texCoordAnimation = mphAnimation?.texCoord ?? null;
 
-        for (let i = 0; i < model.materials.length; i++)
-            this.materialInstances.push(new MaterialInstance(cache, this.tex0, model, model.materials[i]));
+        for (let i = 0; i < model.materials.length; i++) {
+            const material = model.materials[i];
+            const texCoordAnimator = texCoordAnimation !== null ?
+                bindMPHT(this.animationController, texCoordAnimation, material.name) : null;
+            this.materialInstances.push(new MaterialInstance(cache, this.tex0, material, texCoordAnimator));
+        }
 
         for (let i = 0; i < model.nodes.length; i++)
             this.nodes.push(new Node(model.nodes[i]));
@@ -271,23 +296,25 @@ export class MPHRenderer {
             if (this.materialInstances[i].viewerTextures.length > 0)
                 this.viewerTextures.push(this.materialInstances[i].viewerTextures[0]);
 
-        function getNodeIndex(shape: MDL0Shape): number{
+        function getNodeIndex(shape: MDL0Shape): number {
             const view = shape.dlBuffer.createDataView();
             const nodeIndex = view.getInt8(0x04);
             return nodeIndex;
         }
 
-        for (let i = 0; i < mphModel.meshs.length; i++) {
+        for (let i = 0; i < this.nodes.length; i++) {
+            if (!nodeIsVisibleInMode(this.nodes[i].node.name, this.sceneMode))
+                continue;
 
-            const matIndex = mphModel.meshs[i].matID;
-            const shapeIndex = mphModel.meshs[i].shapeID;
-            const shape = model.shapes[shapeIndex];
-            let index = getNodeIndex(shape);
-            if(index >= this.nodes.length){
-                index = 0;
+            const range = mphModel.nodeMeshRanges[i];
+            for (let j = 0; j < range.meshCount; j++) {
+                const mesh = mphModel.meshs[range.meshStart + j];
+                const shape = model.shapes[mesh.shapeID];
+                let transformNodeIndex = getNodeIndex(shape);
+                if (transformNodeIndex >= this.nodes.length)
+                    transformNodeIndex = 0;
+                this.shapeInstances.push(new ShapeInstance(cache, this.materialInstances[mesh.matID], this.nodes[transformNodeIndex], shape, posScale));
             }
-            const nodeIndex = index;
-            this.shapeInstances.push(new ShapeInstance(cache, this.materialInstances[matIndex], this.nodes[nodeIndex], shape, posScale));
         }
     }
 

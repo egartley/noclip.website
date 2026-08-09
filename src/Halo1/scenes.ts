@@ -256,7 +256,7 @@ vec4 AB, CD, ABCD;
             else if (input === rust.ShaderInput.Constant1Alpha)
                 return `u_Color1[${stage}].aaa`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         function genInputAlpha(input: ShaderAlphaInput, stage: number): string { // float
@@ -311,7 +311,7 @@ vec4 AB, CD, ABCD;
             else if (input === rust.ShaderAlphaInput.Constant1Blue)
                 return `u_Color1[${stage}].b`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         function genMapping(input: string, mapping: ShaderMapping, color: boolean): string {
@@ -333,7 +333,7 @@ vec4 AB, CD, ABCD;
             else if (mapping === rust.ShaderMapping.SignedNegate)
                 return `-${input}`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         function genInput(colorInput: ShaderInput, colorMapping: ShaderMapping, alphaInput: ShaderAlphaInput, alphaMapping: ShaderMapping, stage: number): string {
@@ -348,7 +348,7 @@ vec4 AB, CD, ABCD;
             else if (func === rust.ShaderOutputFunction.Multiply)
                 return `(${a} * ${b})`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         function genMux(mux: boolean, ab: string, cd: string): string {
@@ -369,7 +369,7 @@ vec4 AB, CD, ABCD;
             else if (mapping === rust.ShaderOutputMapping.ExpandNormal)
                 return `${v} = (${v} - 0.5) * 2.0;`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         function genOutputColor(output: ShaderOutput, v: string): string {
@@ -392,7 +392,7 @@ vec4 AB, CD, ABCD;
             else if (output === rust.ShaderOutput.Texture3)
                 return `t3.rgb = ${v};`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         function genOutputAlpha(output: ShaderOutput, v: string): string {
@@ -415,7 +415,7 @@ vec4 AB, CD, ABCD;
             else if (output === rust.ShaderOutput.Texture3)
                 return `t3.a = ${v};`;
             else
-                throw "whoops";
+                throw new Error("whoops");
         }
 
         const stages = this.shader.get_stages();
@@ -911,7 +911,6 @@ class MaterialRender_TransparencyWater {
     public visible = true;
 
     constructor(private mgr: HaloSceneManager, textureCache: TextureCache, cache: GfxRenderCache, private shader: HaloShaderTransparentWater, fogEnabled: boolean) {
-        console.log('oh')
         const device = cache.device;
         this.rippleTexture = device.createTexture({
             pixelFormat: GfxFormat.U8_RGBA_NORM,
@@ -924,7 +923,7 @@ class MaterialRender_TransparencyWater {
         });
         device.setResourceName(this.rippleTexture, `Ripple Texture`);
 
-        this.textureMapping[0] = textureCache.getTextureMapping(this.mgr.resolve_bitmap_dependency(shader.base_bitmap));
+        this.textureMapping[0] = textureCache.getTextureMapping(this.mgr.resolve_bitmap_dependency(shader.base_bitmap), undefined, { wrap: false });
         this.textureMapping[7] = textureCache.getTextureMapping(this.mgr.resolve_bitmap_dependency(shader.reflection_bitmap));
 
         this.textureMapping[1] = new TextureMapping();
@@ -2015,7 +2014,7 @@ class HaloScene implements Viewer.SceneGfx {
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
 
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
     }
 

@@ -100,7 +100,7 @@ function getModelInstance(baseObj: BaseObject): MDL0ModelInstance {
     else if (baseObj instanceof MDL0ModelInstance)
         return baseObj;
     else
-        throw "Object's class does not have a known model instance.";
+        throw new Error("Object's class does not have a known model instance.");
 }
 
 class MarioKartWiiRenderer {
@@ -226,6 +226,7 @@ class MarioKartWiiRenderer {
                 this.renderInstListMain.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
             });
         });
+        builder.pushDebugThumbnail(mainDepthTargetID);
 
         if (this.enablePostProcessing && (this.eggDOF !== null || this.eggBloom !== null)) {
             const mainResolveTextureID = builder.resolveRenderTarget(mainColorTargetID);
@@ -244,7 +245,7 @@ class MarioKartWiiRenderer {
         renderInstManager.popTemplate();
 
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
     }
 
@@ -787,7 +788,7 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
                 spawnSimpleObject(`kinoko`, `kinoko_d_kuki`);
                 spawnSimpleObject(`kinoko`, `kinoko_d_r`);
             } else {
-                throw "whoops";
+                throw new Error("whoops");
             }
         } else if (objName === `VolcanoRock1`) {
             spawnSimpleObject(`VolcanoRock1`);
@@ -803,7 +804,7 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
                 spawnSimpleObject(`kinoko`, `kinoko_d_kuki`);
                 spawnSimpleObject(`kinoko`, `kinoko_d_g`);
             } else {
-                throw "whoops";
+                throw new Error("whoops");
             }
         } else if (objName === `Crane`) {
             spawnSimpleObject(`Crane`);

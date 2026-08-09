@@ -1,18 +1,19 @@
 
 import * as Viewer from '../viewer.js';
 import * as BYML from '../byml.js';
+import * as UI from '../ui.js';
 
 import { GfxDevice, GfxCullMode, GfxProgram, GfxMegaStateDescriptor, makeTextureDescriptor2D, GfxFormat, GfxSampler, GfxTexture, GfxTexFilterMode, GfxMipFilterMode, GfxBindingLayoutDescriptor, GfxBlendMode, GfxBlendFactor, GfxBuffer, GfxInputLayout, GfxBufferUsage, GfxBufferFrequencyHint, GfxVertexAttributeDescriptor, GfxInputLayoutBufferDescriptor, GfxVertexBufferFrequency, GfxVertexBufferDescriptor, GfxIndexBufferDescriptor } from '../gfx/platform/GfxPlatform.js';
 import { SceneContext } from '../SceneBase.js';
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderGraphHelpers.js';
-import { F3DEX_Program, textureToCanvas } from '../BanjoKazooie/render.js';
-import { translateBlendMode, RSP_Geometry, translateCullMode } from '../zelview/f3dzex.js';
+import { F3DEX_Program } from '../BanjoKazooie/render.js';
 import { nArray, align, assert } from '../util.js';
 import { DeviceProgram } from '../Program.js';
 import { mat4, vec3 } from 'gl-matrix';
 import { GfxRenderCache } from '../gfx/render/GfxRenderCache.js';
 import { TextureMapping, FakeTextureHolder } from '../TextureHolder.js';
-import { DrawCall, RSPState, runDL_F3DEX2, RSPOutput } from './f3dex2.js';
+import { DrawCall, RSP_Geometry, RSPState, runDL_F3DEX2, RSPOutput } from './f3dex2.js';
+import { translateBlendMode, translateCullMode } from '../PokemonSnap/f3dex2.js';
 import { GfxRenderInstList, GfxRenderInstManager } from '../gfx/render/GfxRenderInstManager.js';
 import { computeViewMatrixSkybox, computeViewMatrix, CameraController } from '../Camera.js';
 import { fillMatrix4x3, fillMatrix4x2, fillVec4, fillMatrix4x4 } from '../gfx/helpers/UniformBufferHelpers.js';
@@ -89,7 +90,7 @@ class DrawCallInstance {
             }
         }
 
-        this.megaStateFlags = translateBlendMode(this.drawCall.DP_OtherModeL);
+        this.megaStateFlags = translateBlendMode(this.drawCall.SP_GeometryMode, this.drawCall.DP_OtherModeL);
         this.setBackfaceCullingEnabled(true);
         this.createProgram();
     }
@@ -444,6 +445,49 @@ class DK64Renderer implements Viewer.SceneGfx {
         c.setSceneMoveSpeedMult(30/60);
     }
 
+    public createPanels(): UI.Panel[] {
+        const renderHacksPanel = new UI.Panel();
+        renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
+        renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
+
+        const enableCullingCheckbox = new UI.Checkbox('Enable Culling', true);
+        enableCullingCheckbox.onchanged = () => {
+            for (const meshRenderer of this.meshRenderers)
+                meshRenderer.setBackfaceCullingEnabled(enableCullingCheckbox.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableCullingCheckbox.elem);
+
+        const enableVertexColorsCheckbox = new UI.Checkbox('Enable Vertex Colors', true);
+        enableVertexColorsCheckbox.onchanged = () => {
+            for (const meshRenderer of this.meshRenderers)
+                meshRenderer.setVertexColorsEnabled(enableVertexColorsCheckbox.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableVertexColorsCheckbox.elem);
+
+        const enableTextures = new UI.Checkbox('Enable Textures', true);
+        enableTextures.onchanged = () => {
+            for (const meshRenderer of this.meshRenderers)
+                meshRenderer.setTexturesEnabled(enableTextures.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableTextures.elem);
+
+        const enableMonochromeVertexColors = new UI.Checkbox('Grayscale Vertex Colors', false);
+        enableMonochromeVertexColors.onchanged = () => {
+            for (const meshRenderer of this.meshRenderers)
+                meshRenderer.setMonochromeVertexColorsEnabled(enableMonochromeVertexColors.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableMonochromeVertexColors.elem);
+
+        const enableAlphaVisualizer = new UI.Checkbox('Visualize Vertex Alpha', false);
+        enableAlphaVisualizer.onchanged = () => {
+            for (const meshRenderer of this.meshRenderers)
+                meshRenderer.setAlphaVisualizerEnabled(enableAlphaVisualizer.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableAlphaVisualizer.elem);
+
+        return [renderHacksPanel];
+    }
+
     private prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
         const template = this.renderHelper.pushTemplateRenderInst();
         template.setBindingLayouts(bindingLayouts);
@@ -478,7 +522,7 @@ class DK64Renderer implements Viewer.SceneGfx {
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
 
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
     }
 
@@ -709,8 +753,8 @@ class SceneDesc implements Viewer.SceneDesc {
             sceneRenderer.meshRenderers.push(meshRenderer);
         }
 
-        for (let i = 0; i < sharedOutput.textureCache.textures.length; i++)
-            sceneRenderer.textureHolder.viewerTextures.push(textureToCanvas(sharedOutput.textureCache.textures[i]));
+        // for (let i = 0; i < sharedOutput.textureCache.textures.length; i++)
+        //     sceneRenderer.textureHolder.viewerTextures.push(textureToCanvas(sharedOutput.textureCache.textures[i]));
 
         // Load setup data, ported from ScriptHawk's dumpSetup() function
         /*

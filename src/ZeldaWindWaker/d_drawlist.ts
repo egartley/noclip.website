@@ -7,7 +7,7 @@ import { BTIData, BTI_Texture } from "../Common/JSYSTEM/JUTTexture.js";
 import { AABB } from "../Geometry.js";
 import { Vec3UnitX, Vec3UnitY, Vec3Zero, getMatrixAxisZ, projectionMatrixForCuboid, saturate } from '../MathHelpers.js';
 import { DeviceProgram } from "../Program.js";
-import { TSDraw } from "../SuperMarioGalaxy/DDraw.js";
+import { TSDraw } from "../gx/DDraw.js";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers.js";
 import { fullscreenMegaState, setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers.js";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary.js";
@@ -352,9 +352,9 @@ layout(std140) uniform ub_Params {
 #define u_ViewportSize (u_Params[0].xy)
 #define u_ShadowLayer (u_Params[0].z)
 
-layout(location = 0) uniform sampler2D u_TextureShadow;
-layout(location = 1) uniform sampler2D u_TextureFramebufferDepth; // Depth buffer
-layout(location = 2) uniform sampler2DArray u_TextureShadowMap;
+layout(binding = 0) uniform sampler2D u_TextureShadow;
+layout(binding = 1) uniform sampler2D u_TextureFramebufferDepth; // Depth buffer
+layout(binding = 2) uniform sampler2DArray u_TextureShadowMap;
 
 #if defined VERT
 layout(location = 0) in vec3 a_Position; // Cube coordinates (-1 to 1).
@@ -1073,7 +1073,7 @@ class dDlst_shadowControl_c {
             pass.exec((passRenderer, scope) => {
                 globals.camera.applyScissor(passRenderer);
                 const depthTex = scope.getResolveTextureForID(mainDepthResolveTextureID);
-                globals.dlst.shadow.resolveLateSamplerBinding('depth-target', { gfxTexture: depthTex, gfxSampler: this.cache.pointSampler, lateBinding: null });
+                globals.dlst.shadow.resolveLateSamplerBinding('depth-target', { gfxTexture: depthTex, gfxSampler: this.cache.pointSampler });
                 globals.dlst.shadow.drawOnPassRenderer(renderInstManager.gfxRenderCache, passRenderer);
             });
         });
@@ -1088,8 +1088,8 @@ class dDlst_shadowControl_c {
                 pass.exec((passRenderer, scope) => {
                     globals.camera.applyScissor(passRenderer);
                     const depthTex = scope.getResolveTextureForID(mainDepthResolveTextureID);
-                    this.realVolumeInstList.resolveLateSamplerBinding('depth-target', { gfxTexture: depthTex, gfxSampler: this.cache.pointSampler, lateBinding: null });
-                    this.realVolumeInstList.resolveLateSamplerBinding('shadowmap-target', { gfxTexture: this.shadowAtlas, gfxSampler: this.cache.linearSampler, lateBinding: null });
+                    this.realVolumeInstList.resolveLateSamplerBinding('depth-target', { gfxTexture: depthTex, gfxSampler: this.cache.pointSampler });
+                    this.realVolumeInstList.resolveLateSamplerBinding('shadowmap-target', { gfxTexture: this.shadowAtlas, gfxSampler: this.cache.linearSampler });
                     this.realVolumeInstList.drawOnPassRenderer(renderInstManager.gfxRenderCache, passRenderer);
                 });
             });

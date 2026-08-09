@@ -420,7 +420,7 @@ export class TwilightPrincessRenderer implements Viewer.SceneGfx {
         for (let i = 0; i < this.rooms.length; i++)
             if (this.rooms[i].roomNo === roomNo)
                 return this.rooms[i].visible;
-        throw "whoops";
+        throw new Error("whoops");
     }
 
     private getSingleRoomVisible(): number {
@@ -598,7 +598,7 @@ export class TwilightPrincessRenderer implements Viewer.SceneGfx {
         this.renderHelper.renderInstManager.popTemplate();
 
         this.renderHelper.prepareToRender();
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
     }
 
     public destroy(device: GfxDevice) {

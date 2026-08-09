@@ -543,7 +543,7 @@ class SM64DSRenderer implements Viewer.SceneGfx {
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
 
         this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
+        builder.execute();
         this.renderInstListMain.reset();
         this.renderInstListSky.reset();
     }
@@ -612,11 +612,11 @@ class SM64DSRenderer implements Viewer.SceneGfx {
         return offs;
     }
 
-    public deserializeSaveState(src: ArrayBuffer, offs: number, byteLength: number): number {
-        const view = new DataView(src);
-        if (offs < byteLength)
-        this.setCurrentScenario(view.getUint8(offs++));
-        return offs;
+    public deserializeSaveState(src: ArrayBufferSlice): void {
+        const view = src.createDataView();
+        let offs = 0;
+        if (offs < view.byteLength)
+            this.setCurrentScenario(view.getUint8(offs++));
     }
 
     public destroy(device: GfxDevice): void {
