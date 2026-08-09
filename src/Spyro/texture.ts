@@ -1,8 +1,12 @@
-import { vec2, vec4 } from "gl-matrix";
-import { parseSpyroTextureTable, SpyroTextureHeader, SpyroVRAM } from "./bin";
+import { parseSpyroTextureTable, SpyroTextureDefinition, SpyroVRAM } from "./bin";
 import { GfxDevice, GfxTextureUsage, GfxTextureDimension } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { GfxTexture } from "../gfx/platform/GfxPlatformImpl";
+
+export interface SpyroTextureHeader {
+    mid: SpyroTextureDefinition,
+    cor?: SpyroTextureDefinition[]
+}
 
 export interface SpyroRawTextures {
     colors: Uint8Array[][];
@@ -24,35 +28,6 @@ export class SpyroTexture {
         });
         device.setResourceName(this.gfxTexture, `tile_${i}`);
         device.uploadTextureData(this.gfxTexture, 0, rgba);
-    }
-}
-
-export class SpyroTextureDefinition {
-    baseX: number;
-    baseY: number;
-    packedPageCoords: vec2;
-    xx: number;
-    yy: number;
-    flags1: number;
-    flags2: number;
-    pageX: number = 0;
-    pageY: number = 0;
-    bitDepth: 4 | 8 | 15 = 4;
-    size: number = 32;
-    rotation: number = 0;
-    shift: number = 0;
-    transparent: number = 0;
-    x: vec4 = vec4.create();
-    y: vec4 = vec4.create();
-
-    constructor(data: DataView, offset: number) {
-        this.baseX = data.getUint8(offset);
-        this.baseY = data.getUint8(offset + 1);
-        this.packedPageCoords = vec2.fromValues(data.getUint8(offset + 2), data.getUint8(offset + 3));
-        this.xx = data.getUint8(offset + 4);
-        this.yy = data.getUint8(offset + 5);
-        this.flags1 = data.getUint8(offset + 6);
-        this.flags2 = data.getUint8(offset + 7);
     }
 }
 

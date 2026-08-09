@@ -19,6 +19,8 @@ Some moby instances aren't detected for regular levels when they should be
 More thoroughly check texture rotation permutations, SWV has some of them wrong. Annoying to check since they're so rare
 Fix or redo water detection. There's some false positives, see the ice in S3 Icy Peak for an example
     Also a few other small issues with water rendering, but it's close enough for now
+Mobys (gems, NPCs, enemies, etc.)
+    Only their per-level instances are implemented (position and type)
 
 Spyro 1
     Figure out edges of "water" in Gnasty's Loot, Icy Flight or Twilight Harbor
@@ -37,16 +39,16 @@ Spyro 3
 
 Nice to have
 
-Mobys (gems, NPCs, enemies, etc.)
-    Only their per-level instances are implemented (position and type)
 Remove hardcoded tile scrolling and read from level data (tile indices and speed)
 Look into removing the hardcoded water animation and read from level data (if it's even there, it might not be)
 Misc level effects, such as vertex color "shimmering" under water sections in S2/S3 and lava movement
 Optional weather effects, such as the snow falling in S3 Super Bonus Round
-Back-face culling. Winding order is not consistent so this may not be feasilble
-Figure out a way to correctly render LOD and MDL polys at the same time without overlap
-    This is not easy since parts will contain both types of polys. Parts with only LOD polys don't connect to the rest of the geometry
-Have an option to visualize the collision data, since that's (supposedly) separate from the visible geometry
+Explore a solution for back-face culling (winding order is not consistent)
+Have an option to visualize the collision data
+Have an option to simulate the game's LOD system
+    It is very complex and is per-polgyon, not per-part. Simply checking the distance to the camera from a part and toggling
+    between MDL and LOD does not work. There's also MID color/texture blending for in-between MDL and LOD. See git history
+    for an attempt at this which kind of worked but was part based
 */
 
 class Renderer implements SceneGfx {
@@ -117,35 +119,13 @@ class Renderer implements SceneGfx {
             panel.contents.appendChild(showMobysCheckbox.elem);
         }
 
-        const applyLOD = new Checkbox("Apply LOD Rendering", this.levelRenderer.applyLOD);
-        applyLOD.onchanged = () => {
-            this.levelRenderer.applyLOD = applyLOD.checked
-        };
-        panel.contents.appendChild(applyLOD.elem);
-        const lodSlider = new Slider();
-        lodSlider.setRange(0, 5000);
-        lodSlider.setLabel("LOD Threshold");
-        lodSlider.setValue(this.levelRenderer.lodThrehold);
-        lodSlider.onvalue = () => {
-            this.levelRenderer.lodThrehold = lodSlider.getValue();
-            if (this.levelRenderer.lodThrehold < this.levelRenderer.midThresold) {
-                this.levelRenderer.midThresold = this.levelRenderer.lodThrehold - 1;
-                midSlider.setValue(this.levelRenderer.midThresold);
-            }
-        };
-        panel.contents.appendChild(lodSlider.elem);
-        const midSlider = new Slider();
-        midSlider.setRange(0, 5000);
-        midSlider.setLabel("MID Threshold");
-        midSlider.setValue(this.levelRenderer.midThresold);
-        midSlider.onvalue = () => {
-            this.levelRenderer.midThresold = midSlider.getValue();
-            if (this.levelRenderer.lodThrehold < this.levelRenderer.midThresold) {
-                this.levelRenderer.lodThrehold = this.levelRenderer.midThresold + 1;
-                lodSlider.setValue(this.levelRenderer.lodThrehold);
-            }
-        };
-        panel.contents.appendChild(midSlider.elem);
+        if (this.levelRenderer.hasLOD) {
+            const useLOD = new Checkbox("Toggle LOD", this.levelRenderer.useLOD);
+            useLOD.onchanged = () => {
+                this.levelRenderer.useLOD = useLOD.checked
+            };
+            panel.contents.appendChild(useLOD.elem);
+        }
 
         return [panel];
     }

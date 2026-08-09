@@ -1,7 +1,7 @@
-import { vec3, vec4 } from "gl-matrix";
+import { vec2, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert } from "../util";
-import { buildSpyroTextureDefinition, SpyroRawTextures, SpyroTextureDefinition } from "./texture";
+import { buildSpyroTextureDefinition, SpyroRawTextures, SpyroTextureHeader } from "./texture";
 
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
 // Further enhancements, additions and fixes are wholly original
@@ -16,7 +16,6 @@ export interface SpyroLevel {
 export interface SpyroGroundPart {
     vlut: number[][];
     clut: number[][];
-    clutMID: number[][];
     vlutLOD: number[][];
     clutLOD: number[][];
     polygons: GroundPolygon[];
@@ -36,11 +35,6 @@ export interface SpyroLevelData {
     ground: ArrayBufferSlice;
     sky: ArrayBufferSlice;
     mobyInstances: ArrayBufferSlice;
-}
-
-export interface SpyroTextureHeader {
-    mid: SpyroTextureDefinition,
-    cor?: SpyroTextureDefinition[]
 }
 
 export interface SpyroSkybox {
@@ -65,6 +59,35 @@ export interface SpyroMobyInstance {
     z: number;
     yaw: number;
     classId: number;
+}
+
+export class SpyroTextureDefinition {
+    baseX: number;
+    baseY: number;
+    packedPageCoords: vec2;
+    xx: number;
+    yy: number;
+    flags1: number;
+    flags2: number;
+    pageX: number = 0;
+    pageY: number = 0;
+    bitDepth: 4 | 8 | 15 = 4;
+    size: number = 32;
+    rotation: number = 0;
+    shift: number = 0;
+    transparent: number = 0;
+    x: vec4 = vec4.create();
+    y: vec4 = vec4.create();
+
+    constructor(data: DataView, offset: number) {
+        this.baseX = data.getUint8(offset);
+        this.baseY = data.getUint8(offset + 1);
+        this.packedPageCoords = vec2.fromValues(data.getUint8(offset + 2), data.getUint8(offset + 3));
+        this.xx = data.getUint8(offset + 4);
+        this.yy = data.getUint8(offset + 5);
+        this.flags1 = data.getUint8(offset + 6);
+        this.flags2 = data.getUint8(offset + 7);
+    }
 }
 
 class GroundPartHeader {
@@ -189,6 +212,12 @@ class Parser {
     public getUint8(): number {
         const n = this.data.getUint8(this.offset);
         this.offset += 1;
+        return n;
+    }
+
+    public getUShort(): number {
+        const n = this.data.getUint16(this.offset);
+        this.offset += 2;
         return n;
     }
 
@@ -553,14 +582,7 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
         }
 
         // MID colors (4)
-        const clutMID = Array(header.mdlColorCount);
-        for (let j = 0; j < header.mdlColorCount; j++) {
-            const r = data.getUint8(offset);
-            const g = data.getUint8(offset + 1);
-            const b = data.getUint8(offset + 2);
-            offset += 4;
-            clutMID[j] = [r, g, b];
-        }
+        offset += header.mdlColorCount * 4;
 
         // MDL polys (16)
         const polygons: GroundPolygon[] = [];
@@ -641,7 +663,7 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
             }
         }
 
-        parts[i] = { vlut, clut, clutMID, vlutLOD, clutLOD, polygons, polygonsLOD };
+        parts[i] = { vlut, clut, vlutLOD, clutLOD, polygons, polygonsLOD };
     }
 
     return { textures, gameNumber, id, parts };
@@ -857,12 +879,13 @@ export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number,
             if (gameNumber === 3) {
                 subfile4.skip(48);
             } else {
-                // weird fix for s2 title screen
+                // weird fix for s2
+                subfile4.skip(25);
                 const unk = subfile4.getUint8();
-                if (unk > 0) {
-                    subfile4.skip(43);
+                if (unk === 0xFF) {
+                    subfile4.skip(18);
                 } else {
-                    subfile4.skip(19);
+                    subfile4.skip(-6);
                 }
             }
             subfile4.skipSection();
