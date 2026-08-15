@@ -14,9 +14,7 @@ import { colorNewFromRGBA, White } from "../Color";
 import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
 import { Destroyable } from "../SceneBase";
 import { computeViewMatrixSkybox } from "../Camera";
-import { AABB } from "../Geometry";
 import { SpyroTexture } from "./texture";
-import { GfxRenderInst } from "../gfx/render/GfxRenderInstManager";
 
 class Shader extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -79,10 +77,6 @@ void main() {
 }
 #endif
     `;
-
-    constructor() {
-        super();
-    }
 }
 
 const BRIGHTNESS_OPAQUE = 1.9;
@@ -118,22 +112,6 @@ const TILE_SCROLL_MAP: Record<number, Record<number, number[]>> = {
     }
 };
 
-function getAABB(vertices: number[]): AABB {
-    const min = { x: Infinity, y: Infinity, z: Infinity };
-    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-    for (let i = 0; i < vertices.length; i += 3) {
-        min.x = Math.min(min.x, vertices[i]);
-        min.y = Math.min(min.y, vertices[i + 1]);
-        min.z = Math.min(min.z, vertices[i + 2]);
-        max.x = Math.max(max.x, vertices[i]);
-        max.y = Math.max(max.y, vertices[i + 1]);
-        max.z = Math.max(max.z, vertices[i + 2]);
-    }
-    const box = new AABB(min.x, min.y, min.z, max.x, max.y, max.z);
-    box.transform(box, NOCLIP_SPACE_CORRECTION);
-    return box;
-}
-
 export class SpyroLevelRenderer {
     public showMobys: boolean = false;
     public showTextures: boolean = true;
@@ -144,7 +122,7 @@ export class SpyroLevelRenderer {
     private gfxSamplerBindings: GfxSamplerBinding[][];
     private inputLayout: GfxInputLayout;
     private scrollSpeed: number;
-    private parts: PartRenderer[];
+    private mesh: LevelMeshRenderer;
 
     constructor(cache: GfxRenderCache, level: SpyroLevel, public mobyInstances: SpyroMobyInstance[]) {
         const textureCount = level.textures.headers.length;
@@ -188,11 +166,12 @@ export class SpyroLevelRenderer {
             this.gfxSamplerBindings[i] = [{ gfxTexture: this.textures[i].gfxTexture, gfxSampler }];
         }
 
-        this.parts = Array(level.parts.length);
-        for (let i = 0; i < level.parts.length; i++) {
-            this.parts[i] = new PartRenderer(cache, level.parts[i], this.inputLayout);
-            if (level.parts[i].polygonsLOD.length > 0) {
+        // for now, all parts are combined into a single mesh
+        this.mesh = new LevelMeshRenderer(cache, level.parts);
+        for (const part of level.parts) {
+            if (part.polygonsLOD.length > 0) {
                 this.hasLOD = true;
+                break;
             }
         }
     }
@@ -211,9 +190,7 @@ export class SpyroLevelRenderer {
         // u_Time (1)
         d[offs++] = viewerInput.time * this.scrollSpeed;
 
-        for (const part of this.parts) {
-            part.prepareToRender(renderHelper, viewerInput, this.gfxSamplerBindings, this.useLOD);
-        }
+        this.mesh.prepareToRender(renderHelper, this.inputLayout, this.gfxSamplerBindings, this.useLOD);
 
         if (this.showMobys) {
             this.drawMobyPointers(renderHelper);
@@ -246,9 +223,7 @@ export class SpyroLevelRenderer {
     }
 
     public destroy(device: GfxDevice) {
-        for (const p of this.parts) {
-            p.destroy(device);
-        }
+        this.mesh.destroy(device);
         for (const t of this.textures) {
             device.destroyTexture(t.gfxTexture);
         }
@@ -261,45 +236,40 @@ interface DrawCall {
     offset: number;
 }
 
-class PartRenderer {
-    public hasMDL: boolean;
-    public hasLOD: boolean;
+class LevelMeshRenderer {
     private indexBufferDescriptor: GfxIndexBufferDescriptor;
     private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
     private drawCount: number;
     private drawCountLOD: number;
     private drawCalls: DrawCall[];
     private indexLODOffset: number;
-    private bbox: AABB;
-    private bboxLOD: AABB;
 
-    constructor(cache: GfxRenderCache, part: SpyroGroundPart, private inputLayout: GfxInputLayout) {
+    constructor(cache: GfxRenderCache, parts: SpyroGroundPart[]) {
         const vertices: number[] = [];
         const colors: number[] = [];
         const uvs: number[] = [];
         const indices: number[] = [];
 
-        // build mdl vertex buffers and gather draw call ordering
         const callMapping: number[] = [];
-        for (const polygon of part.polygons) {
-            if (!callMapping.includes(polygon.textureIndex)) {
-                callMapping.push(polygon.textureIndex);
+        const callIndices: number[] = [];
+        for (const part of parts) {
+            for (const polygon of part.polygons) {
+                if (!callMapping.includes(polygon.textureIndex)) {
+                    callMapping.push(polygon.textureIndex);
+                }
+                for (let i = 0; i < 3; i++) {
+                    const v = part.vlut[polygon.vertices[i]];
+                    const c = part.clut[polygon.colors[i]].map(c => c / 255);
+                    vertices.push(v[0], v[1], v[2]);
+                    colors.push(c[0], c[1], c[2]);
+                    uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
+                    callIndices.push(polygon.textureIndex);
+                }
             }
         }
         callMapping.sort();
         this.drawCalls = Array(callMapping.length);
-        const callIndices: number[] = [];
-        for (const polygon of part.polygons) {
-            for (let i = 0; i < 3; i++) {
-                const v = part.vlut[polygon.vertices[i]];
-                const c = part.clut[polygon.colors[i]].map(c => c / 255);
-                vertices.push(v[0], v[1], v[2]);
-                colors.push(c[0], c[1], c[2]);
-                uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                callIndices.push(polygon.textureIndex);
-            }
-        }
-        // build mdl indices sequentially by texture index, keep track of counts and offsets
+
         for (let i = 0; i < callMapping.length; i++) {
             let count = 0;
             const offset = indices.length;
@@ -311,26 +281,23 @@ class PartRenderer {
             }
             this.drawCalls[i] = { texture: callMapping[i], count, offset };
         }
-        this.bbox = getAABB(vertices);
         this.drawCount = indices.length;
         this.indexLODOffset = indices.length;
-        this.hasMDL = indices.length > 0;
 
-        // append lod indices after mdl indices
         let index = this.drawCount;
-        for (const polygon of part.polygonsLOD) {
-            for (let i = 0; i < 3; i++) {
-                const v = part.vlutLOD[polygon.vertices[i]];
-                const c = part.clutLOD[polygon.colors[i]].map(c => c / 255);
-                vertices.push(v[0], v[1], v[2]);
-                colors.push(c[0], c[1], c[2]);
-                uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                indices.push(index++);
+        for (const part of parts) {
+            for (const polygon of part.polygonsLOD) {
+                for (let i = 0; i < 3; i++) {
+                    const v = part.vlutLOD[polygon.vertices[i]];
+                    const c = part.clutLOD[polygon.colors[i]].map(c => c / 255);
+                    vertices.push(v[0], v[1], v[2]);
+                    colors.push(c[0], c[1], c[2]);
+                    uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
+                    indices.push(index++);
+                }
             }
         }
-        this.bboxLOD = getAABB(vertices.slice(this.drawCount));
         this.drawCountLOD = indices.length - this.indexLODOffset;
-        this.hasLOD = this.drawCountLOD > 0;
 
         this.vertexBufferDescriptors = [
             { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
@@ -340,11 +307,18 @@ class PartRenderer {
         this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
     }
 
-    public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
-        if ((lod ? this.drawCountLOD : this.drawCount) > 0 && viewerInput.camera.frustum.contains(lod ? this.bboxLOD : this.bbox)) {
+    public prepareToRender(renderHelper: GfxRenderHelper, inputLayout: GfxInputLayout, gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
+        if ((lod ? this.drawCountLOD : this.drawCount) > 0) {
             const template = renderHelper.renderInstManager.pushTemplate();
-            template.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
-            this.fillDrawParams(template, !lod);
+            template.setVertexInput(inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
+            let offs = template.allocateUniformBuffer(Shader.ub_DrawParams, 3);
+            const d = template.mapUniformBufferF32(Shader.ub_DrawParams);
+            // u_ApplyTextures (1)
+            d[offs++] = !lod ? 1.0 : 0.0;
+            // u_Brightness (1)
+            d[offs++] = BRIGHTNESS_OPAQUE;
+            // u_Scroll (1)
+            d[offs++] = 0.0;
 
             if (lod) {
                 const renderInst = renderHelper.renderInstManager.newRenderInst();
@@ -368,17 +342,6 @@ class PartRenderer {
         for (const d of this.vertexBufferDescriptors) {
             device.destroyBuffer(d.buffer);
         }
-    }
-
-    private fillDrawParams(renderInst: GfxRenderInst, applyTextures: boolean) {
-        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 3);
-        const d = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
-        // u_ApplyTextures (1)
-        d[offs++] = applyTextures ? 1.0 : 0.0;
-        // u_Brightness (1)
-        d[offs++] = BRIGHTNESS_OPAQUE;
-        // u_Scroll (1)
-        d[offs++] = 0.0;
     }
 }
 
@@ -412,10 +375,6 @@ void main() {
 }
 #endif
     `;
-
-    constructor() {
-        super();
-    }
 }
 
 export class SpyroSkyboxRenderer implements Destroyable {
