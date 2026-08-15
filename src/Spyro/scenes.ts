@@ -7,7 +7,7 @@ import { SpyroLevelRenderer, SpyroSkyboxRenderer } from "./render.js"
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers.js";
-import { Checkbox, COOL_BLUE_COLOR, Panel, RENDER_HACKS_ICON, Slider } from "../ui.js";
+import { Checkbox, COOL_BLUE_COLOR, Panel, RENDER_HACKS_ICON } from "../ui.js";
 import { FakeTextureHolder, TextureHolder } from "../TextureHolder.js";
 import { CameraController } from "../Camera.js";
 import { buildSpyroRawTextures } from "./texture.js";
@@ -46,9 +46,9 @@ Optional weather effects, such as the snow falling in S3 Super Bonus Round
 Explore a solution for back-face culling (winding order is not consistent)
 Have an option to visualize the collision data
 Have an option to simulate the game's LOD system
-    It is very complex and is per-polgyon, not per-part. Simply checking the distance to the camera from a part and toggling
-    between MDL and LOD does not work. There's also MID color/texture blending for in-between MDL and LOD. See git history
-    for an attempt at this which kind of worked but was part based
+    It is per-polgyon, not per-part. Simply checking the distance to the camera from a part and toggling
+    between MDL and LOD doesn't do the trick. There's also MID color/texture blending for in-between MDL and LOD.
+    See git history for an attempt at this which kind of worked but was part-based
 */
 
 class Renderer implements SceneGfx {
@@ -459,6 +459,6 @@ const sceneDescs3 = [
     new S3Level(195, "Bamboo Terrace (Sublevel)")
 ];
 
-export const sceneGroup: SceneGroup = { id: id, name: name, sceneDescs: sceneDescs };
+export const sceneGroup: SceneGroup = { id, name, sceneDescs };
 export const sceneGroup2: SceneGroup = { id: id2, name: name2, sceneDescs: sceneDescs2 };
 export const sceneGroup3: SceneGroup = { id: id3, name: name3, sceneDescs: sceneDescs3 };

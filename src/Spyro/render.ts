@@ -1,7 +1,7 @@
-import { mat4, ReadonlyMat4, vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { defaultMegaState, makeMegaState } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor, GfxSamplerBinding } from "../gfx/platform/GfxPlatform";
 import { GfxInputLayout, GfxProgram } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -28,8 +28,7 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat3x4 u_View;
-    Mat4x4 u_ViewProj;
+    Mat4x4 u_VPM;
     float u_Time;
 };
 
@@ -50,7 +49,6 @@ layout(location = 1) in vec3 a_Color;
 layout(location = 2) in vec2 a_UV;
 
 void main() {
-    // vec3 pos = a_Position;
     v_Color = a_Color;
     v_UV = a_UV;
 
@@ -62,7 +60,7 @@ void main() {
     //     pos.z += wave * 1.1;
     // }
 
-    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_VPM) * vec4(a_Position, 1.0);
 }
 #endif
 
@@ -136,46 +134,6 @@ function getAABB(vertices: number[]): AABB {
     return box;
 }
 
-function getBboxPoints(box: AABB): number[] {
-    return [
-        box.min[0], box.min[1], box.min[2],
-        box.max[0], box.min[1], box.min[2],
-        box.min[0], box.max[1], box.min[2],
-        box.max[0], box.max[1], box.min[2],
-        box.min[0], box.min[1], box.max[2],
-        box.max[0], box.min[1], box.max[2],
-        box.min[0], box.max[1], box.max[2],
-        box.max[0], box.max[1], box.max[2]
-    ];
-}
-
-// much cheaper frustum culling than with aabb
-function inView(bbox: number[], m: ReadonlyMat4) {
-    let aol = true, aor = true;
-    let aob = true, aot = true;
-    let aon = true, aof = true;
-    for (let i = 0; i < 24; i += 3) {
-        const x = bbox[i], y = bbox[i + 1], z = bbox[i + 2];
-        const xw = x * m[0] + y * m[4] + z * m[8] + m[12];
-        const yw = x * m[1] + y * m[5] + z * m[9] + m[13];
-        const zw = x * m[2] + y * m[6] + z * m[10] + m[14];
-        const ww = x * m[3] + y * m[7] + z * m[11] + m[15];
-        if (xw >= -ww && xw <= ww && yw >= -ww && yw <= ww && zw >= 0 && zw <= ww) {
-            return true;
-        }
-        if (xw > -ww) aol = false;
-        if (xw < ww) aor = false;
-        if (yw > -ww) aob = false;
-        if (yw < ww) aot = false;
-        if (zw > 0) aon = false;
-        if (zw < ww) aof = false;
-    }
-    if (aol || aor || aob || aot || aon || aof) {
-        return false;
-    }
-    return true;
-}
-
 export class SpyroLevelRenderer {
     public showMobys: boolean = false;
     public showTextures: boolean = true;
@@ -245,12 +203,9 @@ export class SpyroLevelRenderer {
         template.setBindingLayouts(BINDING_LAYOUTS);
         template.setUniformBuffer(renderHelper.uniformBuffer);
 
-        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 29);
+        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 17);
         const d = template.mapUniformBufferF32(Shader.ub_SceneParams);
-        // u_View (12)
-        mat4.mul(SCRATCH_CLIP, viewerInput.camera.viewMatrix, NOCLIP_SPACE_CORRECTION);
-        offs += fillMatrix4x3(d, offs, SCRATCH_CLIP);
-        // u_ViewProj (16)
+        // u_VPM (16)
         mat4.mul(SCRATCH_CLIP, viewerInput.camera.clipFromWorldMatrix, NOCLIP_SPACE_CORRECTION);
         offs += fillMatrix4x4(d, offs, SCRATCH_CLIP);
         // u_Time (1)
@@ -261,13 +216,13 @@ export class SpyroLevelRenderer {
         }
 
         if (this.showMobys) {
-            this.drawMobys(renderHelper);
+            this.drawMobyPointers(renderHelper);
         }
 
         renderHelper.renderInstManager.popTemplate();
     }
 
-    private drawMobys(renderHelper: GfxRenderHelper): void {
+    private drawMobyPointers(renderHelper: GfxRenderHelper): void {
         for (let i = 0; i < this.mobyInstances.length; i++) {
             const instance = this.mobyInstances[i];
             vec3.transformMat4(SCRATCH_MOBY_POS, vec3.fromValues(instance.x * MOBY_POS_SCALE, instance.y * MOBY_POS_SCALE, instance.z * MOBY_POS_SCALE), NOCLIP_SPACE_CORRECTION);
@@ -315,8 +270,8 @@ class PartRenderer {
     private drawCountLOD: number;
     private drawCalls: DrawCall[];
     private indexLODOffset: number;
-    private bboxPoints: number[];
-    private bboxPointsLOD: number[];
+    private bbox: AABB;
+    private bboxLOD: AABB;
 
     constructor(cache: GfxRenderCache, part: SpyroGroundPart, private inputLayout: GfxInputLayout) {
         const vertices: number[] = [];
@@ -356,7 +311,7 @@ class PartRenderer {
             }
             this.drawCalls[i] = { texture: callMapping[i], count, offset };
         }
-        this.bboxPoints = getBboxPoints(getAABB(vertices));
+        this.bbox = getAABB(vertices);
         this.drawCount = indices.length;
         this.indexLODOffset = indices.length;
         this.hasMDL = indices.length > 0;
@@ -373,7 +328,7 @@ class PartRenderer {
                 indices.push(index++);
             }
         }
-        this.bboxPointsLOD = getBboxPoints(getAABB(vertices.slice(this.drawCount)));
+        this.bboxLOD = getAABB(vertices.slice(this.drawCount));
         this.drawCountLOD = indices.length - this.indexLODOffset;
         this.hasLOD = this.drawCountLOD > 0;
 
@@ -386,25 +341,20 @@ class PartRenderer {
     }
 
     public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput, gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
-        const visible = (lod ? this.drawCountLOD : this.drawCount) > 0 && inView(lod ? this.bboxPointsLOD : this.bboxPoints, viewerInput.camera.clipFromWorldMatrix);
-        if (visible) {
+        if ((lod ? this.drawCountLOD : this.drawCount) > 0 && viewerInput.camera.frustum.contains(lod ? this.bboxLOD : this.bbox)) {
             const template = renderHelper.renderInstManager.pushTemplate();
             template.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
             this.fillDrawParams(template, !lod);
 
             if (lod) {
                 const renderInst = renderHelper.renderInstManager.newRenderInst();
-
                 renderInst.setDrawCount(this.drawCountLOD, this.indexLODOffset);
-
                 renderHelper.renderInstManager.submitRenderInst(renderInst);
             } else {
                 for (const drawCall of this.drawCalls) {
                     const renderInst = renderHelper.renderInstManager.newRenderInst();
-
                     renderInst.setSamplerBindingsFromTextureMappings(gfxSamplerBindings[drawCall.texture]);
                     renderInst.setDrawCount(drawCall.count, drawCall.offset);
-
                     renderHelper.renderInstManager.submitRenderInst(renderInst);
                 }
             }
@@ -441,7 +391,7 @@ precision highp float;
 ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_ViewProj;
+    Mat4x4 u_VPM;
 };
 
 varying vec3 v_Color;
@@ -452,7 +402,7 @@ layout(location = 1) in vec3 a_Color;
 
 void main() {
     v_Color = a_Color;
-    gl_Position = UnpackMatrix(u_ViewProj) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_VPM) * vec4(a_Position, 1.0);
 }
 #endif
 
@@ -527,7 +477,7 @@ export class SpyroSkyboxRenderer implements Destroyable {
 
         let offs = renderInst.allocateUniformBuffer(SkyboxShader.ub_SceneParams, 16);
         const d = renderInst.mapUniformBufferF32(SkyboxShader.ub_SceneParams);
-        // u_ViewProj (16)
+        // u_VPM (16)
         computeViewMatrixSkybox(SCRATCH_VIEW, viewerInput.camera);
         mat4.mul(SCRATCH_VIEW, viewerInput.camera.projectionMatrix, SCRATCH_VIEW);
         mat4.mul(SCRATCH_VIEW, SCRATCH_VIEW, NOCLIP_SPACE_CORRECTION);

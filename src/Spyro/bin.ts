@@ -4,7 +4,6 @@ import { assert } from "../util";
 import { buildSpyroTextureDefinition, SpyroRawTextures, SpyroTextureHeader } from "./texture";
 
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
-// Further enhancements, additions and fixes are wholly original
 
 export interface SpyroLevel {
     textures: SpyroRawTextures;
@@ -62,22 +61,22 @@ export interface SpyroMobyInstance {
 }
 
 export class SpyroTextureDefinition {
-    baseX: number;
-    baseY: number;
-    packedPageCoords: vec2;
-    xx: number;
-    yy: number;
-    flags1: number;
-    flags2: number;
-    pageX: number = 0;
-    pageY: number = 0;
-    bitDepth: 4 | 8 | 15 = 4;
-    size: number = 32;
-    rotation: number = 0;
-    shift: number = 0;
-    transparent: number = 0;
-    x: vec4 = vec4.create();
-    y: vec4 = vec4.create();
+    public baseX: number;
+    public baseY: number;
+    public packedPageCoords: vec2;
+    public xx: number;
+    public yy: number;
+    public flags1: number;
+    public flags2: number;
+    public pageX: number = 0;
+    public pageY: number = 0;
+    public bitDepth: 4 | 8 | 15 = 4;
+    public size: number = 32;
+    public rotation: number = 0;
+    public shift: number = 0;
+    public transparent: number = 0;
+    public x: vec4 = vec4.create();
+    public y: vec4 = vec4.create();
 
     constructor(data: DataView, offset: number) {
         this.baseX = data.getUint8(offset);
@@ -91,17 +90,17 @@ export class SpyroTextureDefinition {
 }
 
 class GroundPartHeader {
-    x: number;
-    y: number;
-    z: number;
-    lodVertexCount: number;
-    lodColorCount: number;
-    lodPolyCount: number;
-    mdlVertexCount: number;
-    mdlColorCount: number;
-    mdlPolyCount: number;
-    water: number;
-    flags: number; // presumably flags, usually is just the max u32 value
+    public x: number;
+    public y: number;
+    public z: number;
+    public lodVertexCount: number;
+    public lodColorCount: number;
+    public lodPolyCount: number;
+    public mdlVertexCount: number;
+    public mdlColorCount: number;
+    public mdlPolyCount: number;
+    public water: number;
+    public flags: number; // presumably flags, usually is just the max u32 value
 
     constructor(data: DataView, offs: number) {
         this.y = data.getInt16(offs, true);
@@ -117,12 +116,6 @@ class GroundPartHeader {
         this.flags = data.getUint32(offs + 16, true);
     }
 }
-
-const VRAM_SIZE = 524288;
-const UV_PERMS = { TL: [0, 1], TR: [1, 1], BR: [1, 0], BL: [0, 0], ZERO: [0, 0] };
-const S2_MDL_BASE = [UV_PERMS.TL, UV_PERMS.TR, UV_PERMS.BR, UV_PERMS.BL];
-const S2_MDL_PERMS = [[0, 1, 2, 3], [3, 0, 1, 2], [2, 3, 0, 1], [1, 2, 3, 0]];
-const EMPTY_ARRAYBUFFERSLICE = new ArrayBufferSlice(new Uint8Array().buffer);
 
 export class SpyroVRAM {
     private data: Uint16Array;
@@ -232,7 +225,13 @@ class Parser {
     }
 }
 
-function unpackSkyIndices(b1: number, b2: number, b3: number, b4: number): [number, number, number] {
+const VRAM_SIZE = 524288;
+const UV_PERMS = { TL: [0, 1], TR: [1, 1], BR: [1, 0], BL: [0, 0], ZERO: [0, 0] };
+const S2_MDL_BASE = [UV_PERMS.TL, UV_PERMS.TR, UV_PERMS.BR, UV_PERMS.BL];
+const S2_MDL_PERMS = [[0, 1, 2, 3], [3, 0, 1, 2], [2, 3, 0, 1], [1, 2, 3, 0]];
+const EMPTY_ARRAYBUFFERSLICE = new ArrayBufferSlice(new Uint8Array().buffer);
+
+function unpackSkyIndices(b1: number, b2: number, b3: number, b4: number): number[] {
     return [(b1 >> 2) | ((b2 & 15) << 6), (b2 >> 4) | ((b3 & 63) << 4), (b3 >> 6) | (b4 << 2)];
 }
 
@@ -304,9 +303,9 @@ function buildSkyboxPart(data: DataView, offset: number): SkyboxPart {
     // polygons (8)
     const polygons: SkyPolygon[] = Array(polyCount);
     for (let i = 0; i < polyCount; i++) {
-        const [vi1, vi2, vi3] = unpackSkyIndices(data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2), data.getUint8(pointer + 3));
-        const [ci1, ci2, ci3] = unpackSkyIndices(data.getUint8(pointer + 4), data.getUint8(pointer + 5), data.getUint8(pointer + 6), data.getUint8(pointer + 7));
-        polygons[i] = { vertices: new Uint32Array([vi1, vi2, vi3]), colors: new Uint32Array([ci1, ci2, ci3]) };
+        const vi = unpackSkyIndices(data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2), data.getUint8(pointer + 3));
+        const ci = unpackSkyIndices(data.getUint8(pointer + 4), data.getUint8(pointer + 5), data.getUint8(pointer + 6), data.getUint8(pointer + 7));
+        polygons[i] = { vertices: new Uint32Array(vi), colors: new Uint32Array(ci) };
         pointer += 8;
     }
 
@@ -483,52 +482,40 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
 
             const poly = unpackGroundLODIndices(vertexIndices, colorIndices, gameNumber);
             if (poly.v1 === poly.v2) {
-                polygonsLOD.push(
-                    {
-                        vertices: new Uint32Array([poly.v2, poly.v3, poly.v4]),
-                        colors: new Uint32Array([poly.c2, poly.c3, poly.c4]),
-                        uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                    }
-                );
+                polygonsLOD.push({
+                    vertices: new Uint32Array([poly.v2, poly.v3, poly.v4]),
+                    colors: new Uint32Array([poly.c2, poly.c3, poly.c4]),
+                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
+                });
             } else if (poly.v2 === poly.v3) {
-                polygonsLOD.push(
-                    {
-                        vertices: new Uint32Array([poly.v1, poly.v3, poly.v4]),
-                        colors: new Uint32Array([poly.c1, poly.c3, poly.c4]),
-                        uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                    }
-                );
+                polygonsLOD.push({
+                    vertices: new Uint32Array([poly.v1, poly.v3, poly.v4]),
+                    colors: new Uint32Array([poly.c1, poly.c3, poly.c4]),
+                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
+                });
             } else if (poly.v3 === poly.v4) {
-                polygonsLOD.push(
-                    {
-                        vertices: new Uint32Array([poly.v1, poly.v2, poly.v4]),
-                        colors: new Uint32Array([poly.c1, poly.c2, poly.c4]),
-                        uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                    }
-                );
+                polygonsLOD.push({
+                    vertices: new Uint32Array([poly.v1, poly.v2, poly.v4]),
+                    colors: new Uint32Array([poly.c1, poly.c2, poly.c4]),
+                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
+                });
             } else if (poly.v4 === poly.v1) {
-                polygonsLOD.push(
-                    {
-                        vertices: new Uint32Array([poly.v1, poly.v2, poly.v3]),
-                        colors: new Uint32Array([poly.c1, poly.c2, poly.c3]),
-                        uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                    }
-                );
+                polygonsLOD.push({
+                    vertices: new Uint32Array([poly.v1, poly.v2, poly.v3]),
+                    colors: new Uint32Array([poly.c1, poly.c2, poly.c3]),
+                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
+                });
             } else {
-                polygonsLOD.push(
-                    {
-                        vertices: new Uint32Array([poly.v2, poly.v1, poly.v3]),
-                        colors: new Uint32Array([poly.c2, poly.c1, poly.c3]),
-                        uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                    }
-                );
-                polygonsLOD.push(
-                    {
-                        vertices: new Uint32Array([poly.v2, poly.v3, poly.v4]),
-                        colors: new Uint32Array([poly.c2, poly.c3, poly.c4]),
-                        uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                    }
-                );
+                polygonsLOD.push({
+                    vertices: new Uint32Array([poly.v2, poly.v1, poly.v3]),
+                    colors: new Uint32Array([poly.c2, poly.c1, poly.c3]),
+                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
+                });
+                polygonsLOD.push({
+                    vertices: new Uint32Array([poly.v2, poly.v3, poly.v4]),
+                    colors: new Uint32Array([poly.c2, poly.c3, poly.c4]),
+                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
+                });
             }
         }
 
@@ -629,37 +616,29 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
             if (isTriangle) {
                 const inverse = (gameNumber > 1) ? !!(ii! & 4) : false;
                 if (!inverse) {
-                    polygons.push(
-                        {
-                            vertices: new Uint32Array([v[1], v[2], v[3]]),
-                            colors: new Uint32Array([c[1], c[2], c[3]]),
-                            uvs: [A, C, D], textureIndex
-                        }
-                    );
+                    polygons.push({
+                        vertices: new Uint32Array([v[1], v[2], v[3]]),
+                        colors: new Uint32Array([c[1], c[2], c[3]]),
+                        uvs: [A, C, D], textureIndex
+                    });
                 } else {
-                    polygons.push(
-                        {
-                            vertices: new Uint32Array([v[3], v[2], v[1]]),
-                            colors: new Uint32Array([c[3], c[2], c[1]]),
-                            uvs: [D, C, A], textureIndex
-                        }
-                    );
+                    polygons.push({
+                        vertices: new Uint32Array([v[3], v[2], v[1]]),
+                        colors: new Uint32Array([c[3], c[2], c[1]]),
+                        uvs: [D, C, A], textureIndex
+                    });
                 }
             } else {
-                polygons.push(
-                    {
-                        vertices: new Uint32Array([v[0], v[1], v[2]]),
-                        colors: new Uint32Array([c[0], c[1], c[2]]),
-                        uvs: [A, B, C], textureIndex
-                    }
-                );
-                polygons.push(
-                    {
-                        vertices: new Uint32Array([v[0], v[2], v[3]]),
-                        colors: new Uint32Array([c[0], c[2], c[3]]),
-                        uvs: [A, C, D], textureIndex
-                    }
-                );
+                polygons.push({
+                    vertices: new Uint32Array([v[0], v[1], v[2]]),
+                    colors: new Uint32Array([c[0], c[1], c[2]]),
+                    uvs: [A, B, C], textureIndex
+                });
+                polygons.push({
+                    vertices: new Uint32Array([v[0], v[2], v[3]]),
+                    colors: new Uint32Array([c[0], c[2], c[3]]),
+                    uvs: [A, C, D], textureIndex
+                });
             }
         }
 
