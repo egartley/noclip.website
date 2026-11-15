@@ -20,11 +20,12 @@ Do more spot checking for water detection and transparency modes. It should be m
 Mobys (gems, NPCs, enemies, etc.)
     Only their per-level instances are implemented (position and type)
 
-Spyro 1
-    Figure out edges of "water" in Gnasty's Loot, Icy Flight or Twilight Harbor
+Spyro 2
+    Stray geometry with scrolling texture in Shady Oasis (???)
 
 Spyro 3
-    Mushroom Speedway's mushrooms should have transparent parts but they aren't marked as transparent
+    Mushroom Speedway's mushrooms' stem texture has weird transparency bits
+        Seems to be the same issue in the Icy Peaks thief sublevel with the supercharge panels, also some z-fighting 
     Figure out how some sublevels' textures have their COR versions loaded into VRAM
         Apparently COR textures that only appear in sublevels (as opposed to both itself and the parent level)
         won't have their data loaded into VRAM until you actually go into the sublevel itself. The tile headers
@@ -38,6 +39,8 @@ Spyro 3
 Nice to have
 
 Remove hardcoded tile scrolling and read from level data (tile indices and speed)
+    Scrolling may be per-part rather than per-texture, since it's possible for two parts to be scrolling/not scrolling and share a texture
+Animated textures such as the supercharge panels
 Look into removing the hardcoded water animation and read from level data (if it's even there, it might not be)
 Misc level effects, such as vertex color "shimmering" under water sections in S2/S3 and lava movement
 Optional weather effects, such as the snow falling in S3 Super Bonus Round

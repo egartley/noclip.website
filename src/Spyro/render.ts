@@ -8,13 +8,13 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { SpyroSkybox, SpyroLevel, SpyroMobyInstance, SpyroGroundPart } from "./bin";
-import { GfxRendererLayer, GfxRenderInst, GfxRenderInstManager, makeSortKey } from "../gfx/render/GfxRenderInstManager";
+import { GfxRendererLayer, GfxRenderInst, GfxRenderInstManager, makeSortKey, setSortKeyDepth } from "../gfx/render/GfxRenderInstManager";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { colorNewFromRGBA, White } from "../Color";
 import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
 import { Destroyable } from "../SceneBase";
-import { computeViewMatrixSkybox } from "../Camera";
+import { computeViewMatrixSkybox, computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
 import { SpyroBlendMode, SpyroTexture } from "./texture";
 
 class Shader extends DeviceProgram {
@@ -36,6 +36,7 @@ layout(std140) uniform ub_DrawParams {
     float u_Scroll;
     float u_IsWater;
     float u_TexelFilter;
+    float u_BlendAlpha;
 };
 
 uniform sampler2D u_Texture;
@@ -85,7 +86,7 @@ void main() {
         if (u_TexelFilter > 1.5 && !stp) {
             discard; // STP only (blended part of semi-transparent)
         }
-        gl_FragColor = vec4(texColor.rgb * v_Color * 2.0, 1.0);
+        gl_FragColor = vec4(min(texColor.rgb * v_Color * 2.0, vec3(1.0)), u_BlendAlpha);
     }
 }
 #endif
@@ -95,7 +96,10 @@ void main() {
 const MOBY_POS_SCALE = 1.0 / 16.0;
 const MOBY_ROT_COLOR = colorNewFromRGBA(1, 1, 0, 1);
 const MOBY_DEBUG_FLAGS = { flags: DebugDrawFlags.WorldSpace };
-const MEGA_STATE_ADDITIVE = makeBlendMegaState(GfxBlendMode.Add, GfxBlendFactor.One, GfxBlendFactor.One);
+const ADDITIVE_BRIGHTNESS = 0.5;
+const MEGA_STATE_ADDITIVE = makeBlendMegaState(GfxBlendMode.Add, GfxBlendFactor.SrcAlpha, GfxBlendFactor.One);
+const MEGA_STATE_AVERAGE = makeBlendMegaState(GfxBlendMode.Add, GfxBlendFactor.SrcAlpha, GfxBlendFactor.OneMinusSrcAlpha);
+const SORT_MAX_DEPTH = 0x40000;
 const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 2, numSamplers: 1 }];
 const BINDING_LAYOUTS_SKY: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 0 }];
 const NOCLIP_SPACE_CORRECTION = mat4.fromValues(
@@ -152,7 +156,8 @@ export class SpyroLevelRenderer {
         }
 
         // speed is hardcoded for now to roughly match appearance in game
-        this.scrollSpeed = 0.001 * (level.gameNumber === 1 ? 2.6 : 2);
+        // it's also not constant throughout each game, so these are averages
+        this.scrollSpeed = 0.001 * (level.gameNumber === 1 ? 2.6 : 1.6);
 
         this.gfxProgram = cache.createProgram(new Shader());
         this.inputLayout = cache.createInputLayout({
@@ -204,7 +209,7 @@ export class SpyroLevelRenderer {
         // u_Time (1)
         d[offs++] = viewerInput.time * this.scrollSpeed;
 
-        this.mesh.prepareToRender(renderHelper, this.inputLayout, this.textures, this.gfxSamplerBindings, this.useLOD);
+        this.mesh.prepareToRender(renderHelper, viewerInput.camera.viewMatrix, this.inputLayout, this.textures, this.gfxSamplerBindings, this.useLOD);
 
         if (this.showMobys) {
             this.drawMobyPointers(renderHelper);
@@ -250,6 +255,7 @@ interface DrawCall {
     blendMode: SpyroBlendMode;
     count: number;
     offset: number;
+    center: vec3 | null;
 }
 
 const enum TexelFilter {
@@ -267,13 +273,13 @@ function makeBlendMegaState(blendMode: GfxBlendMode, blendSrcFactor: GfxBlendFac
 function getBlendMegaState(blend: SpyroBlendMode): Partial<GfxMegaStateDescriptor> {
     switch (blend) {
         case SpyroBlendMode.ADDITIVE:
-            // only additive seems to be used?
             return MEGA_STATE_ADDITIVE;
-        case SpyroBlendMode.AVERAGE: // B/2 + F/2. Output alpha 0.5 with SrcAlpha/OneMinusSrcAlpha, order-dependent so needs depth sorting
+        case SpyroBlendMode.AVERAGE:
+            return MEGA_STATE_AVERAGE;
         case SpyroBlendMode.SUBTRACTIVE: // B - F, ReverseSubtract with One/One
         case SpyroBlendMode.QUARTER: // B + F/4, One/One with the source color scaled by 0.25 in the shader
         default:
-            console.warn(`unimplemented blend mode ${SpyroBlendMode[blend]}, defaulting to additive`);
+            // console.warn(`unimplemented blend mode ${SpyroBlendMode[blend]}, defaulting to additive`);
             return MEGA_STATE_ADDITIVE;
     }
 }
@@ -292,14 +298,32 @@ class LevelMeshRenderer {
         const uvs: number[] = [];
         const indices: number[] = [];
 
-        // group polygons into draw calls by texture, blend mode and water flag
-        // key = textureIndex << 4 | (blend + 1) << 1 | isWater
+        // part centers for depth sorting semi-transparent draw calls
+        const partCenters = parts.map((part) => {
+            const min = vec3.fromValues(Infinity, Infinity, Infinity);
+            const max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
+            for (const v of part.vlut) {
+                vec3.min(min, min, v as vec3);
+                vec3.max(max, max, v as vec3);
+            }
+            const center = vec3.create();
+            if (part.vlut.length > 0) {
+                vec3.lerp(center, min, max, 0.5);
+            }
+            return vec3.transformMat4(center, center, NOCLIP_SPACE_CORRECTION);
+        });
+
+        // group polygons into draw calls by texture, blend mode and water flag. Semi-transparent polygons are also
+        // grouped by part so they can be depth sorted, since blending between average and other modes is order-dependent
+        // key = ((partKey * 128 + textureIndex) << 4) | (blend + 1) << 1 | isWater, where partKey = part index + 1 or 0 if opaque
         const groups = new Map<number, number[]>();
         let index = 0;
-        for (const part of parts) {
+        for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+            const part = parts[partIndex];
             for (const polygon of part.polygons) {
                 const blend = polygon.blendMode ?? SpyroBlendMode.OPAQUE;
-                const key = (polygon.textureIndex << 4) | ((blend + 1) << 1) | (polygon.isWater ? 1 : 0);
+                const partKey = blend === SpyroBlendMode.OPAQUE ? 0 : partIndex + 1;
+                const key = ((partKey * 128 + polygon.textureIndex) << 4) | ((blend + 1) << 1) | (polygon.isWater ? 1 : 0);
                 let group = groups.get(key);
                 if (group === undefined) {
                     group = [];
@@ -322,7 +346,11 @@ class LevelMeshRenderer {
             for (const i of group) {
                 indices.push(i);
             }
-            return { texture: key >> 4, blendMode: ((key >> 1) & 7) - 1, isWater: (key & 1) === 1, count: group.length, offset };
+            const partKey = key >> 11;
+            return {
+                texture: (key >> 4) & 127, blendMode: ((key >> 1) & 7) - 1, isWater: (key & 1) === 1, count: group.length, offset,
+                center: partKey > 0 ? partCenters[partKey - 1] : null
+            };
         });
         this.drawCount = indices.length;
         this.indexLODOffset = indices.length;
@@ -349,7 +377,7 @@ class LevelMeshRenderer {
         this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
     }
 
-    public prepareToRender(renderHelper: GfxRenderHelper, inputLayout: GfxInputLayout, textures: SpyroTexture[], gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
+    public prepareToRender(renderHelper: GfxRenderHelper, viewMatrix: mat4, inputLayout: GfxInputLayout, textures: SpyroTexture[], gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
         if ((lod ? this.drawCountLOD : this.drawCount) > 0) {
             const renderInstManager = renderHelper.renderInstManager;
             const template = renderInstManager.pushTemplate();
@@ -357,7 +385,7 @@ class LevelMeshRenderer {
 
             if (lod) {
                 const renderInst = renderInstManager.newRenderInst();
-                this.fillDrawParams(renderInst, false, false, false, TexelFilter.ALL);
+                this.fillDrawParams(renderInst, false, false, false, TexelFilter.ALL, 1.0);
                 renderInst.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
                 renderInst.setDrawCount(this.drawCountLOD, this.indexLODOffset);
                 renderInstManager.submitRenderInst(renderInst);
@@ -365,13 +393,13 @@ class LevelMeshRenderer {
                 for (const drawCall of this.drawCalls) {
                     const texture = textures[drawCall.texture];
                     if (drawCall.blendMode === SpyroBlendMode.OPAQUE) {
-                        this.submitDrawCall(renderInstManager, drawCall, texture, gfxSamplerBindings, TexelFilter.ALL, null);
+                        this.submitDrawCall(renderInstManager, viewMatrix, drawCall, texture, gfxSamplerBindings, TexelFilter.ALL, false);
                     } else {
                         if (texture.hasOpaqueTexels) {
-                            this.submitDrawCall(renderInstManager, drawCall, texture, gfxSamplerBindings, TexelFilter.NON_STP, null);
+                            this.submitDrawCall(renderInstManager, viewMatrix, drawCall, texture, gfxSamplerBindings, TexelFilter.NON_STP, false);
                         }
                         if (texture.hasStpTexels) {
-                            this.submitDrawCall(renderInstManager, drawCall, texture, gfxSamplerBindings, TexelFilter.STP_ONLY, getBlendMegaState(drawCall.blendMode));
+                            this.submitDrawCall(renderInstManager, viewMatrix, drawCall, texture, gfxSamplerBindings, TexelFilter.STP_ONLY, true);
                         }
                     }
                 }
@@ -381,12 +409,16 @@ class LevelMeshRenderer {
         }
     }
 
-    private submitDrawCall(renderInstManager: GfxRenderInstManager, drawCall: DrawCall, texture: SpyroTexture, gfxSamplerBindings: GfxSamplerBinding[][], texelFilter: TexelFilter, blendMegaState: Partial<GfxMegaStateDescriptor> | null) {
+    private submitDrawCall(renderInstManager: GfxRenderInstManager, viewMatrix: mat4, drawCall: DrawCall, texture: SpyroTexture, gfxSamplerBindings: GfxSamplerBinding[][], texelFilter: TexelFilter, blend: boolean) {
         const renderInst = renderInstManager.newRenderInst();
-        this.fillDrawParams(renderInst, true, texture.isScrolling, drawCall.isWater, texelFilter);
-        if (blendMegaState !== null) {
-            renderInst.setMegaStateFlags(blendMegaState);
-            renderInst.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
+        this.fillDrawParams(renderInst, true, texture.isScrolling, drawCall.isWater, texelFilter, blend ? (drawCall.blendMode === SpyroBlendMode.AVERAGE ? 0.5 : ADDITIVE_BRIGHTNESS) : 1.0);
+        if (blend) {
+            renderInst.setMegaStateFlags(getBlendMegaState(drawCall.blendMode));
+            let sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
+            if (drawCall.center !== null) {
+                sortKey = setSortKeyDepth(sortKey, computeViewSpaceDepthFromWorldSpacePoint(viewMatrix, drawCall.center), SORT_MAX_DEPTH);
+            }
+            renderInst.sortKey = sortKey;
         } else {
             renderInst.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
         }
@@ -395,8 +427,8 @@ class LevelMeshRenderer {
         renderInstManager.submitRenderInst(renderInst);
     }
 
-    private fillDrawParams(renderInst: GfxRenderInst, applyTextures: boolean, isScrolling: boolean, isWater: boolean, texelFilter: TexelFilter) {
-        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 4);
+    private fillDrawParams(renderInst: GfxRenderInst, applyTextures: boolean, isScrolling: boolean, isWater: boolean, texelFilter: TexelFilter, blendAlpha: number) {
+        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 8);
         const d = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
         // u_ApplyTextures (1)
         d[offs++] = applyTextures ? 1.0 : 0.0;
@@ -406,6 +438,8 @@ class LevelMeshRenderer {
         d[offs++] = isWater ? 1.0 : 0.0;
         // u_TexelFilter (1)
         d[offs++] = texelFilter;
+        // u_BlendAlpha (1)
+        d[offs++] = blendAlpha;
     }
 
     public destroy(device: GfxDevice) {

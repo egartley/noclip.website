@@ -29,15 +29,8 @@ export class SpyroTexture {
     public hasStpTexels: boolean = false;
 
     constructor(device: GfxDevice, rgba: Uint8Array[], header: SpyroTextureHeader, i: number, public isScrolling: boolean) {
-        for (const level of rgba) {
-            for (let j = 3; j < level.length; j += 4) {
-                if (level[j] === TEXEL_ALPHA_OPAQUE) {
-                    this.hasOpaqueTexels = true;
-                } else if (level[j] === TEXEL_ALPHA_STP) {
-                    this.hasStpTexels = true;
-                }
-            }
-        }
+        this.hasOpaqueTexels = hasTexelClass(rgba, TEXEL_ALPHA_OPAQUE);
+        this.hasStpTexels = hasTexelClass(rgba, TEXEL_ALPHA_STP);
 
         const s = header.cor === undefined ? 32 : 64;
         this.gfxTexture = device.createTexture({
@@ -85,8 +78,23 @@ export function buildSpyroRawTextures(vram: SpyroVRAM, textureTable: DataView, g
         colors[i].push(applyTileRotationRGBA(
             decodeTileToRGBA(vram, headers[i].mid), headers[i].mid, headers[i].mid.size, gameNumber)
         );
+        if (gameNumber === 1) {
+            // unknown s1 semi-transparency bits, but semi-transparent textures always contain STP texels
+            headers[i].mid.semiTransparent = hasTexelClass(colors[i], TEXEL_ALPHA_STP);
+        }
     }
     return { colors, headers };
+}
+
+function hasTexelClass(rgba: Uint8Array[], alpha: number): boolean {
+    for (const level of rgba) {
+        for (let j = 3; j < level.length; j += 4) {
+            if (level[j] === alpha) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 export function buildSpyroTextureDefinition(data: DataView, offset: number, gameNumber: number): SpyroTextureDefinition {
@@ -135,7 +143,6 @@ export function buildSpyroTextureDefinition(data: DataView, offset: number, game
     if (gameNumber > 1) {
         tex.semiTransparent = (tex.flags2 & 128) > 0;
     }
-    // s1 semi-transparency flag is unknown (flags2 & 128 is the texture size)
     return tex;
 }
 
