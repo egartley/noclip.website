@@ -1,20 +1,21 @@
 import { mat4, vec3 } from "gl-matrix";
-import { defaultMegaState, makeMegaState } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
+import { defaultMegaState, makeMegaState, setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor, GfxSamplerBinding } from "../gfx/platform/GfxPlatform";
+import { GfxDevice, GfxBufferUsage, GfxBufferFrequencyHint, GfxFormat, GfxVertexBufferFrequency, GfxBindingLayoutDescriptor, GfxTexFilterMode, GfxWrapMode, GfxMipFilterMode, GfxCompareMode, GfxCullMode, GfxIndexBufferDescriptor, GfxVertexBufferDescriptor, GfxMegaStateDescriptor, GfxSamplerBinding, GfxBlendMode, GfxBlendFactor } from "../gfx/platform/GfxPlatform";
 import { GfxInputLayout, GfxProgram } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { DeviceProgram } from "../Program";
 import { ViewerRenderInput } from "../viewer";
 import { SpyroSkybox, SpyroLevel, SpyroMobyInstance, SpyroGroundPart } from "./bin";
+import { GfxRendererLayer, GfxRenderInst, GfxRenderInstManager, makeSortKey } from "../gfx/render/GfxRenderInstManager";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { colorNewFromRGBA, White } from "../Color";
 import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
 import { Destroyable } from "../SceneBase";
 import { computeViewMatrixSkybox } from "../Camera";
-import { SpyroTexture } from "./texture";
+import { SpyroBlendMode, SpyroTexture } from "./texture";
 
 class Shader extends DeviceProgram {
     public static ub_SceneParams = 0;
@@ -33,6 +34,8 @@ layout(std140) uniform ub_SceneParams {
 layout(std140) uniform ub_DrawParams {
     float u_ApplyTextures;
     float u_Scroll;
+    float u_IsWater;
+    float u_TexelFilter;
 };
 
 uniform sampler2D u_Texture;
@@ -49,15 +52,16 @@ void main() {
     v_Color = a_Color;
     v_UV = a_UV;
 
-    // if (u_IsWater > 0.1) {
-    //     float t1 = u_Time;
-    //     float t2 = u_Time * 0.12;
-    //     float phase = dot(pos.xz, vec2(0.025, 0.03));
-    //     float wave = sin(t1 + phase) * 3.0 + sin(t2 + phase * 1.7) * 1.5;
-    //     pos.z += wave * 1.1;
-    // }
+    vec3 pos = a_Position;
+    if (u_IsWater > 0.5) {
+        float t1 = u_Time;
+        float t2 = u_Time * 0.12;
+        float phase = dot(pos.xz, vec2(0.025, 0.03));
+        float wave = sin(t1 + phase) * 3.0 + sin(t2 + phase * 1.7) * 1.5;
+        pos.z += wave * 1.1;
+    }
 
-    gl_Position = UnpackMatrix(u_VPM) * vec4(a_Position, 1.0);
+    gl_Position = UnpackMatrix(u_VPM) * vec4(pos, 1.0);
 }
 #endif
 
@@ -71,6 +75,16 @@ void main() {
             uv.y = fract(uv.y - u_Time * 0.45);
         }
         vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
+        if (texColor.a < 0.25) {
+            discard;
+        }
+        bool stp = texColor.a < 0.75;
+        if (u_TexelFilter > 0.5 && u_TexelFilter < 1.5 && stp) {
+            discard; // non-STP only (opaque part of semi-transparent)
+        }
+        if (u_TexelFilter > 1.5 && !stp) {
+            discard; // STP only (blended part of semi-transparent)
+        }
         gl_FragColor = vec4(texColor.rgb * v_Color * 2.0, 1.0);
     }
 }
@@ -81,6 +95,7 @@ void main() {
 const MOBY_POS_SCALE = 1.0 / 16.0;
 const MOBY_ROT_COLOR = colorNewFromRGBA(1, 1, 0, 1);
 const MOBY_DEBUG_FLAGS = { flags: DebugDrawFlags.WorldSpace };
+const MEGA_STATE_ADDITIVE = makeBlendMegaState(GfxBlendMode.Add, GfxBlendFactor.One, GfxBlendFactor.One);
 const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 2, numSamplers: 1 }];
 const BINDING_LAYOUTS_SKY: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 0 }];
 const NOCLIP_SPACE_CORRECTION = mat4.fromValues(
@@ -126,7 +141,9 @@ export class SpyroLevelRenderer {
         const scrollFlags = Array(textureCount).fill(false);
         if (level.id in TILE_SCROLL_MAP[level.gameNumber]) {
             for (const ti of TILE_SCROLL_MAP[level.gameNumber][level.id]) {
-                scrollFlags[ti] = true;
+                if (ti >= 0 && ti < textureCount) {
+                    scrollFlags[ti] = true;
+                }
             }
         }
         this.textures = new Array(textureCount);
@@ -187,7 +204,7 @@ export class SpyroLevelRenderer {
         // u_Time (1)
         d[offs++] = viewerInput.time * this.scrollSpeed;
 
-        this.mesh.prepareToRender(renderHelper, this.inputLayout, this.gfxSamplerBindings, this.useLOD);
+        this.mesh.prepareToRender(renderHelper, this.inputLayout, this.textures, this.gfxSamplerBindings, this.useLOD);
 
         if (this.showMobys) {
             this.drawMobyPointers(renderHelper);
@@ -229,8 +246,36 @@ export class SpyroLevelRenderer {
 
 interface DrawCall {
     texture: number;
+    isWater: boolean;
+    blendMode: SpyroBlendMode;
     count: number;
     offset: number;
+}
+
+const enum TexelFilter {
+    ALL = 0,
+    NON_STP = 1,
+    STP_ONLY = 2
+}
+
+function makeBlendMegaState(blendMode: GfxBlendMode, blendSrcFactor: GfxBlendFactor, blendDstFactor: GfxBlendFactor): Partial<GfxMegaStateDescriptor> {
+    const megaState: Partial<GfxMegaStateDescriptor> = { depthWrite: false };
+    setAttachmentStateSimple(megaState, { blendMode, blendSrcFactor, blendDstFactor });
+    return megaState;
+}
+
+function getBlendMegaState(blend: SpyroBlendMode): Partial<GfxMegaStateDescriptor> {
+    switch (blend) {
+        case SpyroBlendMode.ADDITIVE:
+            // only additive seems to be used?
+            return MEGA_STATE_ADDITIVE;
+        case SpyroBlendMode.AVERAGE: // B/2 + F/2. Output alpha 0.5 with SrcAlpha/OneMinusSrcAlpha, order-dependent so needs depth sorting
+        case SpyroBlendMode.SUBTRACTIVE: // B - F, ReverseSubtract with One/One
+        case SpyroBlendMode.QUARTER: // B + F/4, One/One with the source color scaled by 0.25 in the shader
+        default:
+            console.warn(`unimplemented blend mode ${SpyroBlendMode[blend]}, defaulting to additive`);
+            return MEGA_STATE_ADDITIVE;
+    }
 }
 
 class LevelMeshRenderer {
@@ -247,41 +292,41 @@ class LevelMeshRenderer {
         const uvs: number[] = [];
         const indices: number[] = [];
 
-        const callMapping: number[] = [];
-        const callIndices: number[] = [];
+        // group polygons into draw calls by texture, blend mode and water flag
+        // key = textureIndex << 4 | (blend + 1) << 1 | isWater
+        const groups = new Map<number, number[]>();
+        let index = 0;
         for (const part of parts) {
             for (const polygon of part.polygons) {
-                if (!callMapping.includes(polygon.textureIndex)) {
-                    callMapping.push(polygon.textureIndex);
+                const blend = polygon.blendMode ?? SpyroBlendMode.OPAQUE;
+                const key = (polygon.textureIndex << 4) | ((blend + 1) << 1) | (polygon.isWater ? 1 : 0);
+                let group = groups.get(key);
+                if (group === undefined) {
+                    group = [];
+                    groups.set(key, group);
                 }
                 for (let i = 0; i < 3; i++) {
                     const v = part.vlut[polygon.vertices[i]];
-                    const c = part.clut[polygon.colors[i]].map(c => c / 255);
+                    const c = part.clut[polygon.colors[i]];
                     vertices.push(v[0], v[1], v[2]);
-                    colors.push(c[0], c[1], c[2]);
+                    colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
                     uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                    callIndices.push(polygon.textureIndex);
+                    group.push(index++);
                 }
             }
         }
-        callMapping.sort();
-        this.drawCalls = Array(callMapping.length);
-
-        for (let i = 0; i < callMapping.length; i++) {
-            let count = 0;
+        const keys = [...groups.keys()].sort((a, b) => a - b);
+        this.drawCalls = keys.map((key) => {
+            const group = groups.get(key)!;
             const offset = indices.length;
-            for (let j = 0; j < callIndices.length; j++) {
-                if (callMapping.indexOf(callIndices[j]) === i) {
-                    indices.push(j);
-                    count++;
-                }
+            for (const i of group) {
+                indices.push(i);
             }
-            this.drawCalls[i] = { texture: callMapping[i], count, offset };
-        }
+            return { texture: key >> 4, blendMode: ((key >> 1) & 7) - 1, isWater: (key & 1) === 1, count: group.length, offset };
+        });
         this.drawCount = indices.length;
         this.indexLODOffset = indices.length;
 
-        let index = this.drawCount;
         for (const part of parts) {
             for (const polygon of part.polygonsLOD) {
                 for (let i = 0; i < 3; i++) {
@@ -304,32 +349,63 @@ class LevelMeshRenderer {
         this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
     }
 
-    public prepareToRender(renderHelper: GfxRenderHelper, inputLayout: GfxInputLayout, gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
+    public prepareToRender(renderHelper: GfxRenderHelper, inputLayout: GfxInputLayout, textures: SpyroTexture[], gfxSamplerBindings: GfxSamplerBinding[][], lod: boolean) {
         if ((lod ? this.drawCountLOD : this.drawCount) > 0) {
-            const template = renderHelper.renderInstManager.pushTemplate();
+            const renderInstManager = renderHelper.renderInstManager;
+            const template = renderInstManager.pushTemplate();
             template.setVertexInput(inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
-            let offs = template.allocateUniformBuffer(Shader.ub_DrawParams, 4);
-            const d = template.mapUniformBufferF32(Shader.ub_DrawParams);
-            // u_ApplyTextures (1)
-            d[offs++] = !lod ? 1.0 : 0.0;
-            // u_Scroll (1)
-            d[offs++] = 0.0;
 
             if (lod) {
-                const renderInst = renderHelper.renderInstManager.newRenderInst();
+                const renderInst = renderInstManager.newRenderInst();
+                this.fillDrawParams(renderInst, false, false, false, TexelFilter.ALL);
+                renderInst.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
                 renderInst.setDrawCount(this.drawCountLOD, this.indexLODOffset);
-                renderHelper.renderInstManager.submitRenderInst(renderInst);
+                renderInstManager.submitRenderInst(renderInst);
             } else {
                 for (const drawCall of this.drawCalls) {
-                    const renderInst = renderHelper.renderInstManager.newRenderInst();
-                    renderInst.setSamplerBindingsFromTextureMappings(gfxSamplerBindings[drawCall.texture]);
-                    renderInst.setDrawCount(drawCall.count, drawCall.offset);
-                    renderHelper.renderInstManager.submitRenderInst(renderInst);
+                    const texture = textures[drawCall.texture];
+                    if (drawCall.blendMode === SpyroBlendMode.OPAQUE) {
+                        this.submitDrawCall(renderInstManager, drawCall, texture, gfxSamplerBindings, TexelFilter.ALL, null);
+                    } else {
+                        if (texture.hasOpaqueTexels) {
+                            this.submitDrawCall(renderInstManager, drawCall, texture, gfxSamplerBindings, TexelFilter.NON_STP, null);
+                        }
+                        if (texture.hasStpTexels) {
+                            this.submitDrawCall(renderInstManager, drawCall, texture, gfxSamplerBindings, TexelFilter.STP_ONLY, getBlendMegaState(drawCall.blendMode));
+                        }
+                    }
                 }
             }
 
-            renderHelper.renderInstManager.popTemplate();
+            renderInstManager.popTemplate();
         }
+    }
+
+    private submitDrawCall(renderInstManager: GfxRenderInstManager, drawCall: DrawCall, texture: SpyroTexture, gfxSamplerBindings: GfxSamplerBinding[][], texelFilter: TexelFilter, blendMegaState: Partial<GfxMegaStateDescriptor> | null) {
+        const renderInst = renderInstManager.newRenderInst();
+        this.fillDrawParams(renderInst, true, texture.isScrolling, drawCall.isWater, texelFilter);
+        if (blendMegaState !== null) {
+            renderInst.setMegaStateFlags(blendMegaState);
+            renderInst.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
+        } else {
+            renderInst.sortKey = makeSortKey(GfxRendererLayer.OPAQUE);
+        }
+        renderInst.setSamplerBindingsFromTextureMappings(gfxSamplerBindings[drawCall.texture]);
+        renderInst.setDrawCount(drawCall.count, drawCall.offset);
+        renderInstManager.submitRenderInst(renderInst);
+    }
+
+    private fillDrawParams(renderInst: GfxRenderInst, applyTextures: boolean, isScrolling: boolean, isWater: boolean, texelFilter: TexelFilter) {
+        let offs = renderInst.allocateUniformBuffer(Shader.ub_DrawParams, 4);
+        const d = renderInst.mapUniformBufferF32(Shader.ub_DrawParams);
+        // u_ApplyTextures (1)
+        d[offs++] = applyTextures ? 1.0 : 0.0;
+        // u_Scroll (1)
+        d[offs++] = isScrolling ? 1.0 : 0.0;
+        // u_IsWater (1)
+        d[offs++] = isWater ? 1.0 : 0.0;
+        // u_TexelFilter (1)
+        d[offs++] = texelFilter;
     }
 
     public destroy(device: GfxDevice) {
@@ -428,6 +504,7 @@ export class SpyroSkyboxRenderer implements Destroyable {
         renderInst.setBindingLayouts(BINDING_LAYOUTS_SKY);
         renderInst.setUniformBuffer(renderHelper.uniformBuffer);
         renderInst.setMegaStateFlags(this.megaStateFlags);
+        renderInst.sortKey = makeSortKey(GfxRendererLayer.BACKGROUND);
 
         let offs = renderInst.allocateUniformBuffer(SkyboxShader.ub_SceneParams, 16);
         const d = renderInst.mapUniformBufferF32(SkyboxShader.ub_SceneParams);

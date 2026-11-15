@@ -1,7 +1,7 @@
 import { vec2, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert } from "../util";
-import { buildSpyroTextureDefinition, SpyroRawTextures, SpyroTextureHeader } from "./texture";
+import { buildSpyroTextureDefinition, SpyroBlendMode, SpyroRawTextures, SpyroTextureHeader } from "./texture";
 
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
 
@@ -26,6 +26,8 @@ interface GroundPolygon {
     colors: Uint32Array;
     uvs: number[][];
     textureIndex: number;
+    isWater?: boolean;
+    blendMode?: SpyroBlendMode;
 }
 
 export interface SpyroLevelData {
@@ -74,7 +76,8 @@ export class SpyroTextureDefinition {
     public size: number = 32;
     public rotation: number = 0;
     public shift: number = 0;
-    public transparent: number = 0;
+    public semiTransparent: boolean = false;
+    public blendMode: SpyroBlendMode = SpyroBlendMode.AVERAGE;
     public x: vec4 = vec4.create();
     public y: vec4 = vec4.create();
 
@@ -578,11 +581,14 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
             let c = vec4.fromValues(data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7));
             let packedTileIndex;
             let uvPerm, ii;
+            let isWater = false;
             if (gameNumber == 1) {
                 packedTileIndex = data.getUint8(offset + 8);
                 uvPerm = data.getUint8(offset + 9);
             } else {
-                // s = vec4.fromValues(data.getUint8(offset + 8), data.getUint8(offset + 9), data.getUint8(offset + 10), data.getUint8(offset + 11));
+                isWater = header.water === 0 &&
+                    data.getUint8(offset + 8) === 0 && data.getUint8(offset + 9) === 0 &&
+                    data.getUint8(offset + 10) === 0 && data.getUint8(offset + 11) === 0;
                 packedTileIndex = data.getUint8(offset + 12) & 127;
                 ii = data.getUint8(offset + 13);
             }
@@ -594,6 +600,7 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
                 continue;
             }
             const tile = textures.headers[textureIndex].mid;
+            const blendMode = tile.semiTransparent ? tile.blendMode : SpyroBlendMode.OPAQUE;
             let A = UV_PERMS.TL, B = UV_PERMS.TR, C = UV_PERMS.BR, D = UV_PERMS.BL;
 
             const isTriangle = v[0] === v[1];
@@ -619,25 +626,25 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
                     polygons.push({
                         vertices: new Uint32Array([v[1], v[2], v[3]]),
                         colors: new Uint32Array([c[1], c[2], c[3]]),
-                        uvs: [A, C, D], textureIndex
+                        uvs: [A, C, D], textureIndex, isWater, blendMode
                     });
                 } else {
                     polygons.push({
                         vertices: new Uint32Array([v[3], v[2], v[1]]),
                         colors: new Uint32Array([c[3], c[2], c[1]]),
-                        uvs: [D, C, A], textureIndex
+                        uvs: [D, C, A], textureIndex, isWater, blendMode
                     });
                 }
             } else {
                 polygons.push({
                     vertices: new Uint32Array([v[0], v[1], v[2]]),
                     colors: new Uint32Array([c[0], c[1], c[2]]),
-                    uvs: [A, B, C], textureIndex
+                    uvs: [A, B, C], textureIndex, isWater, blendMode
                 });
                 polygons.push({
                     vertices: new Uint32Array([v[0], v[2], v[3]]),
                     colors: new Uint32Array([c[0], c[2], c[3]]),
-                    uvs: [A, C, D], textureIndex
+                    uvs: [A, C, D], textureIndex, isWater, blendMode
                 });
             }
         }

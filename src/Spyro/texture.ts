@@ -15,10 +15,30 @@ export interface SpyroRawTextures {
     headers: SpyroTextureHeader[];
 }
 
+export enum SpyroBlendMode {
+    OPAQUE = -1,
+    AVERAGE = 0, // B/2 + F/2
+    ADDITIVE = 1, // B + F
+    SUBTRACTIVE = 2, // B - F
+    QUARTER = 3, // B + F/4
+}
+
 export class SpyroTexture {
     public gfxTexture: GfxTexture;
+    public hasOpaqueTexels: boolean = false;
+    public hasStpTexels: boolean = false;
 
     constructor(device: GfxDevice, rgba: Uint8Array[], header: SpyroTextureHeader, i: number, public isScrolling: boolean) {
+        for (const level of rgba) {
+            for (let j = 3; j < level.length; j += 4) {
+                if (level[j] === TEXEL_ALPHA_OPAQUE) {
+                    this.hasOpaqueTexels = true;
+                } else if (level[j] === TEXEL_ALPHA_STP) {
+                    this.hasStpTexels = true;
+                }
+            }
+        }
+
         const s = header.cor === undefined ? 32 : 64;
         this.gfxTexture = device.createTexture({
             width: s, height: s,
@@ -111,13 +131,11 @@ export function buildSpyroTextureDefinition(data: DataView, offset: number, game
     tex.pageX = (tex.packedPageCoords[0] & 31) * 16;
     tex.pageY = (tex.packedPageCoords[0] >> 6) | (tex.packedPageCoords[1] << 2);
     tex.rotation = ((tex.flags2 & 127) >> 4) & 7;
+    tex.blendMode = (tex.flags1 >> 5) & 3;
     if (gameNumber > 1) {
-        if ((tex.flags2 & 128) > 0) {
-            tex.transparent = 1 + ((tex.flags1 & 127) >> 5);
-        } else {
-            tex.transparent = 0;
-        }
+        tex.semiTransparent = (tex.flags2 & 128) > 0;
     }
+    // s1 semi-transparency flag is unknown (flags2 & 128 is the texture size)
     return tex;
 }
 
@@ -206,12 +224,16 @@ function applyTileRotationRGBA(rgba: Uint8Array, tex: SpyroTextureDefinition, si
     return rotatedRGBA;
 }
 
+const TEXEL_ALPHA_TRANSPARENT = 0;
+const TEXEL_ALPHA_STP = 128;
+const TEXEL_ALPHA_OPAQUE = 255;
+
 function colorBitsToRGBA(word: number): [number, number, number, number] {
     return [
         (((word) & 31) * 255 / 31) | 0,
         (((word >> 5) & 31) * 255 / 31) | 0,
         (((word >> 10) & 31) * 255 / 31) | 0,
-        ((word >> 15) & 1) ? 0 : 255
+        word === 0x0000 ? TEXEL_ALPHA_TRANSPARENT : ((word >> 15) & 1) ? TEXEL_ALPHA_STP : TEXEL_ALPHA_OPAQUE
     ];
 }
 

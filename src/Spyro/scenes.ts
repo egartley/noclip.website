@@ -15,10 +15,8 @@ import { buildSpyroRawTextures } from "./texture.js";
 /*
 TODO
 
-Some moby instances aren't detected for regular levels when they should be
 More thoroughly check texture rotation permutations, SWV has some of them wrong. Annoying to check since they're so rare
-Fix or redo water detection. There's some false positives, see the ice in S3 Icy Peak for an example
-    Also a few other small issues with water rendering, but it's close enough for now
+Do more spot checking for water detection and transparency modes. It should be mostly right, aside from the opinionated wave animation
 Mobys (gems, NPCs, enemies, etc.)
     Only their per-level instances are implemented (position and type)
 
