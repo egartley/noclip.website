@@ -3,6 +3,8 @@ import { GfxDevice, GfxTextureUsage, GfxTextureDimension } from "../gfx/platform
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { GfxTexture } from "../gfx/platform/GfxPlatformImpl";
 
+// Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
+
 export interface SpyroTextureHeader {
     mid: SpyroTextureDefinition,
     cor?: SpyroTextureDefinition[]
@@ -31,7 +33,7 @@ export class SpyroTexture {
     }
 }
 
-// temp manual workaround for cor textures in s3 sublevels with "missing" vram data
+// temp manual workaround for cor textures in s3 sublevels with "missing" vram data (see TODO notes)
 const S3_SUBLEVEL_INVALID_COR_TEXTURES: Map<number, number[]> = new Map([
     [122, [3, 4, 5, 6, 77, 78]],
     [124, [10, 15, 16, 67]],

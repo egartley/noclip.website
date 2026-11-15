@@ -209,7 +209,7 @@ class S3Level implements SceneDesc {
     }
 }
 
-// all subfile/level ids are 1-based from the NSTC versions and v1.1 of Spyro 3
+// all subfile/level ids are 1-based from the NTSC versions and v1.1 of Spyro 3
 const id = "Spyro1";
 const id2 = "Spyro2";
 const id3 = "Spyro3";

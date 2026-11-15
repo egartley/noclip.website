@@ -32,7 +32,6 @@ layout(std140) uniform ub_SceneParams {
 
 layout(std140) uniform ub_DrawParams {
     float u_ApplyTextures;
-    float u_Brightness;
     float u_Scroll;
 };
 
@@ -72,15 +71,13 @@ void main() {
             uv.y = fract(uv.y - u_Time * 0.45);
         }
         vec4 texColor = texture(SAMPLER_2D(u_Texture), uv);
-        gl_FragColor = vec4(texColor.rgb * v_Color * u_Brightness, 1.0);
+        gl_FragColor = vec4(texColor.rgb * v_Color * 2.0, 1.0);
     }
 }
 #endif
     `;
 }
 
-const BRIGHTNESS_OPAQUE = 1.9;
-const BRIGHTNESS_TRANSPARENT = 1.0;
 const MOBY_POS_SCALE = 1.0 / 16.0;
 const MOBY_ROT_COLOR = colorNewFromRGBA(1, 1, 0, 1);
 const MOBY_DEBUG_FLAGS = { flags: DebugDrawFlags.WorldSpace };
@@ -311,12 +308,10 @@ class LevelMeshRenderer {
         if ((lod ? this.drawCountLOD : this.drawCount) > 0) {
             const template = renderHelper.renderInstManager.pushTemplate();
             template.setVertexInput(inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
-            let offs = template.allocateUniformBuffer(Shader.ub_DrawParams, 3);
+            let offs = template.allocateUniformBuffer(Shader.ub_DrawParams, 4);
             const d = template.mapUniformBufferF32(Shader.ub_DrawParams);
             // u_ApplyTextures (1)
             d[offs++] = !lod ? 1.0 : 0.0;
-            // u_Brightness (1)
-            d[offs++] = BRIGHTNESS_OPAQUE;
             // u_Scroll (1)
             d[offs++] = 0.0;
 
