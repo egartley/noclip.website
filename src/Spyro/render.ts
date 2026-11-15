@@ -182,7 +182,7 @@ export class SpyroLevelRenderer {
         template.setBindingLayouts(BINDING_LAYOUTS);
         template.setUniformBuffer(renderHelper.uniformBuffer);
 
-        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 17);
+        let offs = template.allocateUniformBuffer(Shader.ub_SceneParams, 20);
         const d = template.mapUniformBufferF32(Shader.ub_SceneParams);
         // u_VPM (16)
         mat4.mul(SCRATCH_CLIP, viewerInput.camera.clipFromWorldMatrix, NOCLIP_SPACE_CORRECTION);
