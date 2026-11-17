@@ -1,33 +1,40 @@
-import { vec2, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { assert } from "../util";
-import { buildSpyroTextureDefinition, SpyroBlendMode, SpyroRawTextures, SpyroTextureHeader } from "./texture";
+import { SpyroBlendMode, SpyroRawTexture, SpyroVRAM } from "./texture";
 
 // Credit to "Spyro World Viewer" by Kly_Men_COmpany for the initial parsing and reverse-engineering work
 
+interface Polygon {
+    vertices: number[];
+    colors: number[];
+}
+
+interface SkyboxPart {
+    vlut: number[][];
+    clut: number[][];
+    polygons: Polygon[];
+}
+
 export interface SpyroLevel {
-    textures: SpyroRawTextures;
+    textures: SpyroRawTexture[];
     gameNumber: number;
     id: number;
     parts: SpyroGroundPart[];
-};
+}
 
 export interface SpyroGroundPart {
     vlut: number[][];
     clut: number[][];
     vlutLOD: number[][];
     clutLOD: number[][];
-    polygons: GroundPolygon[];
-    polygonsLOD: GroundPolygon[];
+    polygons: SpyroMDLPolygon[];
+    polygonsLOD: Polygon[];
 }
 
-interface GroundPolygon {
-    vertices: Uint32Array;
-    colors: Uint32Array;
+export interface SpyroMDLPolygon extends Polygon {
     uvs: number[][];
     textureIndex: number;
-    isWater?: boolean;
-    blendMode?: SpyroBlendMode;
+    isWater: boolean;
+    blendMode: SpyroBlendMode;
 }
 
 export interface SpyroLevelData {
@@ -43,109 +50,12 @@ export interface SpyroSkybox {
     parts: SkyboxPart[];
 }
 
-interface SkyboxPart {
-    vlut: number[][];
-    clut: number[][];
-    polygons: SkyPolygon[];
-}
-
-interface SkyPolygon {
-    vertices: Uint32Array;
-    colors: Uint32Array;
-}
-
 export interface SpyroMobyInstance {
     x: number;
     y: number;
     z: number;
     yaw: number;
     classId: number;
-}
-
-export class SpyroTextureDefinition {
-    public baseX: number;
-    public baseY: number;
-    public packedPageCoords: vec2;
-    public xx: number;
-    public yy: number;
-    public flags1: number;
-    public flags2: number;
-    public pageX: number = 0;
-    public pageY: number = 0;
-    public bitDepth: 4 | 8 | 15 = 4;
-    public size: number = 32;
-    public rotation: number = 0;
-    public shift: number = 0;
-    public semiTransparent: boolean = false;
-    public blendMode: SpyroBlendMode = SpyroBlendMode.AVERAGE;
-    public x: vec4 = vec4.create();
-    public y: vec4 = vec4.create();
-
-    constructor(data: DataView, offset: number) {
-        this.baseX = data.getUint8(offset);
-        this.baseY = data.getUint8(offset + 1);
-        this.packedPageCoords = vec2.fromValues(data.getUint8(offset + 2), data.getUint8(offset + 3));
-        this.xx = data.getUint8(offset + 4);
-        this.yy = data.getUint8(offset + 5);
-        this.flags1 = data.getUint8(offset + 6);
-        this.flags2 = data.getUint8(offset + 7);
-    }
-}
-
-class GroundPartHeader {
-    public x: number;
-    public y: number;
-    public z: number;
-    public lodVertexCount: number;
-    public lodColorCount: number;
-    public lodPolyCount: number;
-    public mdlVertexCount: number;
-    public mdlColorCount: number;
-    public mdlPolyCount: number;
-    public water: number;
-    public flags: number; // presumably flags, usually is just the max u32 value
-
-    constructor(data: DataView, offs: number) {
-        this.y = data.getInt16(offs, true);
-        this.x = data.getInt16(offs + 2, true);
-        this.z = data.getInt16(offs + 6, true);
-        this.lodVertexCount = data.getUint8(offs + 8);
-        this.lodColorCount = data.getUint8(offs + 9);
-        this.lodPolyCount = data.getUint8(offs + 10);
-        this.mdlVertexCount = data.getUint8(offs + 12);
-        this.mdlColorCount = data.getUint8(offs + 13);
-        this.mdlPolyCount = data.getUint8(offs + 14);
-        this.water = data.getUint8(offs + 15);
-        this.flags = data.getUint32(offs + 16, true);
-    }
-}
-
-export class SpyroVRAM {
-    private data: Uint16Array;
-
-    constructor(data: ArrayBufferSlice) {
-        this.data = new Uint16Array(data.copyToBuffer());
-    }
-
-    public getWord(wordX: number, wordY: number): number {
-        if (wordX < 0 || wordX >= 512 || wordY < 0 || wordY >= 512) {
-            return 0;
-        }
-        return this.data[wordY * 512 + wordX];
-    }
-
-    public getWordByIndex(index: number): number {
-        if (index < 0 || index >= this.data.length) {
-            return 0;
-        }
-        return this.data[index];
-    }
-
-    public applyFontStripFix() {
-        for (let x = 512; x <= 575; x++) {
-            this.data[130560 + x] = this.data[130048 + x - 512];
-        }
-    }
 }
 
 class Parser {
@@ -211,12 +121,6 @@ class Parser {
         return n;
     }
 
-    public getUShort(): number {
-        const n = this.data.getUint16(this.offset);
-        this.offset += 2;
-        return n;
-    }
-
     public getUint32(): number {
         const n = this.data.getUint32(this.offset, true);
         this.offset += 4;
@@ -229,137 +133,102 @@ class Parser {
 }
 
 const VRAM_SIZE = 524288;
-const UV_PERMS = { TL: [0, 1], TR: [1, 1], BR: [1, 0], BL: [0, 0], ZERO: [0, 0] };
-const S2_MDL_BASE = [UV_PERMS.TL, UV_PERMS.TR, UV_PERMS.BR, UV_PERMS.BL];
-const S2_MDL_PERMS = [[0, 1, 2, 3], [3, 0, 1, 2], [2, 3, 0, 1], [1, 2, 3, 0]];
 const EMPTY_ARRAYBUFFERSLICE = new ArrayBufferSlice(new Uint8Array().buffer);
+const UV_CORNERS = [[0, 1], [1, 1], [1, 0], [0, 0]]; // TL, TR, BR, BL
+const UV_ROTATIONS = [0, 1, 2, 3].map((r) => [0, 1, 2, 3].map((j) => UV_CORNERS[(j + r) & 3]));
+
+function readGroundPartHeader(data: DataView, offs: number) {
+    return {
+        y: data.getInt16(offs, true),
+        x: data.getInt16(offs + 2, true),
+        z: data.getInt16(offs + 6, true),
+        lodVertexCount: data.getUint8(offs + 8),
+        lodColorCount: data.getUint8(offs + 9),
+        lodPolyCount: data.getUint8(offs + 10),
+        mdlVertexCount: data.getUint8(offs + 12),
+        mdlColorCount: data.getUint8(offs + 13),
+        mdlPolyCount: data.getUint8(offs + 14),
+        water: data.getUint8(offs + 15),
+        flags: data.getUint32(offs + 16, true) // presumably flags, usually is just the max u32 value
+    };
+}
+
+function readVertices(data: DataView, offset: number, count: number, origin: number[], zScale = 1): number[][] {
+    const vertices: number[][] = Array(count);
+    for (let i = 0; i < count; i++, offset += 4) {
+        const b1 = data.getUint8(offset);
+        const b2 = data.getUint8(offset + 1);
+        const b3 = data.getUint8(offset + 2);
+        const b4 = data.getUint8(offset + 3);
+        vertices[i] = [
+            ((b3 >> 5) | (b4 << 3)) + origin[0],
+            ((b2 >> 2) | ((b3 & 31) << 6)) + origin[1],
+            Math.floor((b1 | ((b2 & 3) << 8)) * zScale) + origin[2]
+        ];
+    }
+    return vertices;
+}
+
+function readColors(data: DataView, offset: number, count: number): number[][] {
+    const colors: number[][] = Array(count);
+    for (let i = 0; i < count; i++, offset += 4) {
+        colors[i] = [data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2)];
+    }
+    return colors;
+}
+
+function getPolygon(v: number[], c: number[], i0: number, i1: number, i2: number): Polygon {
+    return { vertices: [v[i0], v[i1], v[i2]], colors: [c[i0], c[i1], c[i2]] };
+}
+
+function isWaterPolygon(data: DataView, polyOffset: number): boolean {
+    // heuristic for water, needs further confirmation
+    return data.getUint32(polyOffset + 8, true) === 0;
+}
 
 function unpackSkyIndices(b1: number, b2: number, b3: number, b4: number): number[] {
     return [(b1 >> 2) | ((b2 & 15) << 6), (b2 >> 4) | ((b3 & 63) << 4), (b3 >> 6) | (b4 << 2)];
 }
 
-function unpackGroundLODIndices(v: number[], c: number[], gameNumber: number) {
+function unpackGroundLODIndices(data: DataView, offset: number, gameNumber: number): { v: number[], c: number[] } {
     if (gameNumber === 1) {
-        assert(v.length === 3);
-        assert(c.length === 3);
+        const unpack = (b0: number, b1: number, b2: number) => [b0 & 63, (b0 >> 6) | ((b1 & 15) << 2), (b1 >> 4) | ((b2 & 3) << 4), b2 >> 2];
         return {
-            v1: (v[0] & 63),
-            v2: (v[0] >> 6) | ((v[1] & 15) << 2),
-            v3: (v[1] >> 4) | ((v[2] & 3) << 4),
-            v4: (v[2] >> 2),
-            c1: (c[0] & 63),
-            c2: (c[0] >> 6) | ((c[1] & 15) << 2),
-            c3: (c[1] >> 4) | ((c[2] & 3) << 4),
-            c4: (c[2] >> 2),
-        };
-    } else {
-        assert(v.length === 4);
-        assert(c.length === 4);
-        return {
-            v1: (v[0] >> 3) | ((v[1] & 3) << 5),
-            v2: (v[1] >> 2) | ((v[2] & 1) << 6),
-            v3: (v[2] >> 1),
-            v4: (v[3] & 127),
-            c1: (c[0] >> 4) | ((c[1] & 7) << 4),
-            c2: (c[1] >> 3) | ((c[2] & 3) << 5),
-            c3: (c[2] >> 2) | ((c[3] & 1) << 6),
-            c4: (c[3] >> 1),
+            v: unpack(data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3)),
+            c: unpack(data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7))
         };
     }
+    const v = [data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3)];
+    const c = [data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7)];
+    return {
+        v: [(v[0] >> 3) | ((v[1] & 3) << 5), (v[1] >> 2) | ((v[2] & 1) << 6), v[2] >> 1, v[3] & 127],
+        c: [(c[0] >> 4) | ((c[1] & 7) << 4), (c[1] >> 3) | ((c[2] & 3) << 5), (c[2] >> 2) | ((c[3] & 1) << 6), c[3] >> 1]
+    };
 }
 
-function buildSkyboxPart(data: DataView, offset: number): SkyboxPart {
-    let pointer = offset;
-    const vlut: number[][] = [];
-    const clut: number[][] = [];
-
-    // header (24)
-    pointer += 8;
-    const globalY = data.getInt16(pointer, true);
-    const globalZ = data.getInt16(pointer + 2, true);
-    const vertexCount = data.getUint16(pointer + 4, true);
-    const globalX = data.getInt16(pointer + 6, true);
-    const polyCount = data.getUint16(pointer + 8, true);
-    const colorCount = data.getUint16(pointer + 10, true);
-    pointer += 16;
-
-    // vertices (4)
-    for (let i = 0; i < vertexCount; i++) {
-        const b1 = data.getUint8(pointer);
-        const b2 = data.getUint8(pointer + 1);
-        const b3 = data.getUint8(pointer + 2);
-        const b4 = data.getUint8(pointer + 3);
-        vlut.push([
-            ((b3 >> 5) | (b4 << 3)) + globalX,
-            ((b2 >> 2) | ((b3 & 31) << 6)) - globalY,
-            (b1 | ((b2 & 3) << 8)) - globalZ
-        ]);
-        pointer += 4;
-    }
-
-    // colors (4)
-    for (let i = 0; i < colorCount; i++) {
-        clut.push([data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2)]);
-        pointer += 4;
-    }
-
+function readSkyPolygons(data: DataView, offset: number, count: number): Polygon[] {
     // polygons (8)
-    const polygons: SkyPolygon[] = Array(polyCount);
-    for (let i = 0; i < polyCount; i++) {
-        const vi = unpackSkyIndices(data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2), data.getUint8(pointer + 3));
-        const ci = unpackSkyIndices(data.getUint8(pointer + 4), data.getUint8(pointer + 5), data.getUint8(pointer + 6), data.getUint8(pointer + 7));
-        polygons[i] = { vertices: new Uint32Array(vi), colors: new Uint32Array(ci) };
-        pointer += 8;
+    const polygons: Polygon[] = Array(count);
+    for (let i = 0; i < count; i++, offset += 8) {
+        const vertices = unpackSkyIndices(data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3));
+        const colors = unpackSkyIndices(data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7));
+        polygons[i] = { vertices, colors };
     }
-
-    return { vlut, clut, polygons };
+    return polygons;
 }
 
-function buildSkyboxPart2(data: DataView, partOffset: number): SkyboxPart {
-    let pointer = partOffset;
-    const vlut: number[][] = [];
-    const clut: number[][] = [];
-    const polygons: SkyPolygon[] = [];
-
-    // header (20)
-    pointer += 8;
-    const globalY = data.getInt16(pointer, true);
-    const globalZ = data.getInt16(pointer + 2, true);
-    const vertexCount = data.getUint8(pointer + 4);
-    const colorCount = data.getUint8(pointer + 5);
-    const globalX = data.getInt16(pointer + 6, true);
-    const polyCount = data.getUint16(pointer + 10, true);
-    pointer += 12;
-
-    // vertices (4)
-    for (let i = 0; i < vertexCount; i++) {
-        const b1 = data.getUint8(pointer);
-        const b2 = data.getUint8(pointer + 1);
-        const b3 = data.getUint8(pointer + 2);
-        const b4 = data.getUint8(pointer + 3);
-        vlut.push([
-            ((b3 >> 5) | (b4 << 3)) + globalX,
-            ((b2 >> 2) | ((b3 & 31) << 6)) - globalY,
-            (b1 | ((b2 & 3) << 8)) - globalZ
-        ]);
-        pointer += 4;
-    }
-
-    // colors (4)
-    for (let i = 0; i < colorCount; i++) {
-        clut.push([data.getUint8(pointer), data.getUint8(pointer + 1), data.getUint8(pointer + 2)]);
-        pointer += 4;
-    }
-
-    // polys (variable size, at least 4)
-    let seeker = pointer + polyCount; 
-    for (let i = polyCount; i > 3; i -= 4) {
+function readSkyPolygonStrips(data: DataView, offset: number, size: number): Polygon[] {
+    // variable size, at least 4
+    const polygons: Polygon[] = [];
+    let pointer = offset;
+    let seeker = offset + size;
+    for (let i = size; i > 3; i -= 4) {
         const b1 = data.getUint8(pointer);
         const b2 = data.getUint8(pointer + 1);
         const b3 = data.getUint8(pointer + 2);
         let c0 = (b1 >> 3) | ((b2 & 3) << 5);
         let c1 = (b2 >> 2) | ((b3 & 1) << 6);
-        let c2 = b3 >> 1;
+        const c2 = b3 >> 1;
         let v0 = data.getUint8(pointer + 3);
         pointer += 4;
 
@@ -367,16 +236,16 @@ function buildSkyboxPart2(data: DataView, partOffset: number): SkyboxPart {
         const v2 = data.getUint8(seeker + 1);
         seeker += 2;
 
-        polygons.push({ vertices: new Uint32Array([v0, v1, v2]), colors: new Uint32Array([c0, c1, c2]) });
+        polygons.push({ vertices: [v0, v1, v2], colors: [c0, c1, c2] });
 
         let v3Base = v0;
         let c3Base = c0;
-        for (let i = 0; i < (b1 & 7); i++) {
+        for (let j = 0; j < (b1 & 7); j++) {
             const v2New = data.getUint8(seeker);
             const cm = data.getUint8(seeker + 1);
             const c2New = cm & 127;
 
-            polygons.push({ vertices: new Uint32Array([v0, v1, v2New]), colors: new Uint32Array([c0, c1, c2New]) });
+            polygons.push({ vertices: [v0, v1, v2New], colors: [c0, c1, c2New] });
 
             if ((cm & 128) > 0) {
                 v1 = v3Base;
@@ -389,7 +258,37 @@ function buildSkyboxPart2(data: DataView, partOffset: number): SkyboxPart {
             seeker += 2;
         }
     }
+    return polygons;
+}
 
+function buildSkyboxPart(data: DataView, offset: number, gameNumber: number): SkyboxPart {
+    const globalY = data.getInt16(offset + 8, true);
+    const globalZ = data.getInt16(offset + 10, true);
+    const globalX = data.getInt16(offset + 14, true);
+    let vertexCount: number, colorCount: number, polyCount: number;
+    if (gameNumber === 1) {
+        // header (24)
+        vertexCount = data.getUint16(offset + 12, true);
+        polyCount = data.getUint16(offset + 16, true);
+        colorCount = data.getUint16(offset + 18, true);
+        offset += 24;
+    } else {
+        // header (20)
+        vertexCount = data.getUint8(offset + 12);
+        colorCount = data.getUint8(offset + 13);
+        polyCount = data.getUint16(offset + 18, true);
+        offset += 20;
+    }
+
+    // vertices (4)
+    const vlut = readVertices(data, offset, vertexCount, [globalX, -globalY, -globalZ]);
+    offset += vertexCount * 4;
+
+    // colors (4)
+    const clut = readColors(data, offset, colorCount);
+    offset += colorCount * 4;
+
+    const polygons = gameNumber === 1 ? readSkyPolygons(data, offset, polyCount) : readSkyPolygonStrips(data, offset, polyCount);
     return { vlut, clut, polygons };
 }
 
@@ -397,27 +296,19 @@ export function buildSpyroSkybox(data: DataView, gameNumber: number): SpyroSkybo
     const backgroundColor = [data.getUint8(0), data.getUint8(1), data.getUint8(2)];
     const partCount = data.getUint32(4, true);
     let pointer = 8;
-    const partOffsets: number[] = [];
+    const parts: SkyboxPart[] = [];
     for (let i = 0; i < partCount; i++) {
         const offset = data.getUint32(pointer, true);
         pointer += 4;
         if (offset === 0 || offset >= data.byteLength) {
             break;
         }
-        partOffsets.push(offset);
-    }
-    const parts: SkyboxPart[] = Array(partOffsets.length);
-    for (let i = 0; i < partOffsets.length; i++) {
-        if (gameNumber == 1) {
-            parts[i] = buildSkyboxPart(data, partOffsets[i]);
-        } else {
-            parts[i] = buildSkyboxPart2(data, partOffsets[i]);
-        }
+        parts.push(buildSkyboxPart(data, offset, gameNumber));
     }
     return { backgroundColor, parts };
 }
 
-export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, gameNumber: number, id: number): SpyroLevel {
+export function buildSpyroLevel(data: DataView, textures: SpyroRawTexture[], gameNumber: number, id: number): SpyroLevel {
     let partCount = data.getUint32(0, true);
     let offset = 4;
     const partOffsets: number[] = [];
@@ -437,215 +328,98 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
 
         // header (28)
         offset += 8;
-        const header = new GroundPartHeader(data, offset);
+        const header = readGroundPartHeader(data, offset);
         offset += 20;
+        const origin = [header.x, header.y, header.z];
 
         // LOD vertices (4)
-        const vlutLOD = Array(header.lodVertexCount);
-        for (let j = 0; j < header.lodVertexCount; j++) {
-            const byte1 = data.getUint8(offset);
-            const byte2 = data.getUint8(offset + 1);
-            const byte3 = data.getUint8(offset + 2);
-            const byte4 = data.getUint8(offset + 3);
-            offset += 4;
-
-            const zRaw = (byte1 | ((byte2 & 3) << 8));
-            let z = zRaw + header.z;
-            if (gameNumber > 1) {
-                z = (zRaw << 1) + header.z;
-            }
-            const y = ((byte2 >> 2) | ((byte3 & 31) << 6)) + header.y;
-            const x = ((byte3 >> 5) | (byte4 << 3)) + header.x;
-            vlutLOD[j] = [x, y, z];
-        }
+        const vlutLOD = readVertices(data, offset, header.lodVertexCount, origin, gameNumber > 1 ? 2 : 1);
+        offset += header.lodVertexCount * 4;
 
         // LOD colors (4)
-        const clutLOD = Array(header.lodColorCount);
-        for (let j = 0; j < header.lodColorCount; j++) {
-            const r = data.getUint8(offset);
-            const g = data.getUint8(offset + 1);
-            const b = data.getUint8(offset + 2);
-            offset += 4;
-            clutLOD[j] = [r, g, b];
-        }
+        const clutLOD = readColors(data, offset, header.lodColorCount);
+        offset += header.lodColorCount * 4;
 
         // LOD polys (8)
-        const polygonsLOD: GroundPolygon[] = [];
-        for (let j = 0; j < header.lodPolyCount; j++) {
-            let vertexIndices;
-            let colorIndices;
-            if (gameNumber === 1) {
-                vertexIndices = [data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3)];
-                colorIndices = [data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7)];
+        const polygonsLOD: Polygon[] = [];
+        for (let j = 0; j < header.lodPolyCount; j++, offset += 8) {
+            const { v, c } = unpackGroundLODIndices(data, offset, gameNumber);
+            const lod = (a: number, b: number, d: number) => polygonsLOD.push(getPolygon(v, c, a, b, d));
+            if (v[0] === v[1]) {
+                lod(1, 2, 3);
+            } else if (v[1] === v[2]) {
+                lod(0, 2, 3);
+            } else if (v[2] === v[3]) {
+                lod(0, 1, 3);
+            } else if (v[3] === v[0]) {
+                lod(0, 1, 2);
             } else {
-                vertexIndices = [data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3)];
-                colorIndices = [data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7)];
-            }
-            offset += 8;
-
-            const poly = unpackGroundLODIndices(vertexIndices, colorIndices, gameNumber);
-            if (poly.v1 === poly.v2) {
-                polygonsLOD.push({
-                    vertices: new Uint32Array([poly.v2, poly.v3, poly.v4]),
-                    colors: new Uint32Array([poly.c2, poly.c3, poly.c4]),
-                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                });
-            } else if (poly.v2 === poly.v3) {
-                polygonsLOD.push({
-                    vertices: new Uint32Array([poly.v1, poly.v3, poly.v4]),
-                    colors: new Uint32Array([poly.c1, poly.c3, poly.c4]),
-                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                });
-            } else if (poly.v3 === poly.v4) {
-                polygonsLOD.push({
-                    vertices: new Uint32Array([poly.v1, poly.v2, poly.v4]),
-                    colors: new Uint32Array([poly.c1, poly.c2, poly.c4]),
-                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                });
-            } else if (poly.v4 === poly.v1) {
-                polygonsLOD.push({
-                    vertices: new Uint32Array([poly.v1, poly.v2, poly.v3]),
-                    colors: new Uint32Array([poly.c1, poly.c2, poly.c3]),
-                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                });
-            } else {
-                polygonsLOD.push({
-                    vertices: new Uint32Array([poly.v2, poly.v1, poly.v3]),
-                    colors: new Uint32Array([poly.c2, poly.c1, poly.c3]),
-                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                });
-                polygonsLOD.push({
-                    vertices: new Uint32Array([poly.v2, poly.v3, poly.v4]),
-                    colors: new Uint32Array([poly.c2, poly.c3, poly.c4]),
-                    uvs: [UV_PERMS.ZERO, UV_PERMS.ZERO, UV_PERMS.ZERO], textureIndex: 0
-                });
+                lod(1, 0, 2);
+                lod(1, 2, 3);
             }
         }
 
-        let isWaterNonGround = false;
+        const polyOffset = offset + header.mdlVertexCount * 4 + header.mdlColorCount * 8;
+        let zScale = 1;
         if (gameNumber > 1) {
-            let pos = offset + header.mdlVertexCount * 4 + header.mdlColorCount * 4 + header.mdlColorCount * 4;
-            for (let i = 0; i < header.mdlPolyCount; i++) {
-                const s1 = data.getUint8(pos + 8);
-                const s2 = data.getUint8(pos + 9);
-                const s3 = data.getUint8(pos + 10);
-                const s4 = data.getUint8(pos + 11);
-                if (s1 === 0 && s2 === 0 && s3 === 0 && s4 === 0) {
-                    isWaterNonGround = true;
-                    break;
+            const far = header.lodVertexCount === 0 && header.flags === 0xFFFFFFFF;
+            const hasWater = () => {
+                for (let j = 0; j < header.mdlPolyCount; j++) {
+                    if (isWaterPolygon(data, polyOffset + j * 16)) {
+                        return true;
+                    }
                 }
-                pos += 16;
-            }
+                return false;
+            };
+            // weird z-scaling for shady oasis and mystic marsh in s2
+            zScale = (header.water > 0 || (far && !hasWater())) ? 2 : 0.25;
         }
 
         // MDL vertices (4)
-        const vlut = Array(header.mdlVertexCount);
-        for (let j = 0; j < header.mdlVertexCount; j++) {
-            const byte1 = data.getUint8(offset);
-            const byte2 = data.getUint8(offset + 1);
-            const byte3 = data.getUint8(offset + 2);
-            const byte4 = data.getUint8(offset + 3);
-            offset += 4;
-            const zraw = (byte1 | ((byte2 & 3) << 8));
-            let z = zraw + header.z;
-            if (gameNumber > 1) {
-                const far = header.lodVertexCount === 0 && header.flags === 0xFFFFFFFF;
-                if ((far && !isWaterNonGround) || (far && isWaterNonGround && header.water > 0) || (!far && header.water > 0)) {
-                    z = (zraw << 1) + header.z;
-                } else {
-                    z = (zraw >> 2) + header.z;
-                }
-            }
-            const y = ((byte2 >> 2) | ((byte3 & 31) << 6)) + header.y;
-            const x = ((byte3 >> 5) | (byte4 << 3)) + header.x;
-            vlut[j] = [x, y, z];
-        }
+        const vlut = readVertices(data, offset, header.mdlVertexCount, origin, zScale);
+        offset += header.mdlVertexCount * 4;
 
         // MDL colors (4)
-        const clut = Array(header.mdlColorCount);
-        for (let j = 0; j < header.mdlColorCount; j++) {
-            const r = data.getUint8(offset);
-            const g = data.getUint8(offset + 1);
-            const b = data.getUint8(offset + 2);
-            offset += 4;
-            clut[j] = [r, g, b];
-        }
+        const clut = readColors(data, offset, header.mdlColorCount);
+        offset += header.mdlColorCount * 4;
 
         // MID colors (4)
+        // unused here, but used in game for blending between lod and mdl parts (basically an approx of the texture at distance)
         offset += header.mdlColorCount * 4;
 
         // MDL polys (16)
-        const polygons: GroundPolygon[] = [];
+        const polygons: SpyroMDLPolygon[] = [];
         for (let j = 0; j < header.mdlPolyCount; j++) {
-            let v = vec4.fromValues(data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3));
-            let c = vec4.fromValues(data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7));
-            let packedTileIndex;
-            let uvPerm, ii;
-            let isWater = false;
-            if (gameNumber == 1) {
-                packedTileIndex = data.getUint8(offset + 8);
-                uvPerm = data.getUint8(offset + 9);
-            } else {
-                isWater = header.water === 0 &&
-                    data.getUint8(offset + 8) === 0 && data.getUint8(offset + 9) === 0 &&
-                    data.getUint8(offset + 10) === 0 && data.getUint8(offset + 11) === 0;
-                packedTileIndex = data.getUint8(offset + 12) & 127;
-                ii = data.getUint8(offset + 13);
-            }
+            const v = [data.getUint8(offset), data.getUint8(offset + 1), data.getUint8(offset + 2), data.getUint8(offset + 3)];
+            const c = [data.getUint8(offset + 4), data.getUint8(offset + 5), data.getUint8(offset + 6), data.getUint8(offset + 7)];
+            const isTriangle = v[0] === v[1];
+            const textureIndex = data.getUint8(offset + (gameNumber === 1 ? 8 : 12)) & 127;
+            const uvFlags = data.getUint8(offset + (gameNumber === 1 ? 9 : 13));
+            const isWater = gameNumber > 1 && header.water === 0 && isWaterPolygon(data, offset);
             offset += 16;
 
-            const textureIndex = packedTileIndex & 127;
-            if (textureIndex < 0 || textureIndex >= textures.headers.length) {
-                // console.warn("Out of bounds tile index for", poly, textureIndex);
+            if (textureIndex >= textures.length) {
                 continue;
             }
-            const tile = textures.headers[textureIndex].mid;
+            const tile = textures[textureIndex].mid;
             const blendMode = tile.semiTransparent ? tile.blendMode : SpyroBlendMode.OPAQUE;
-            let A = UV_PERMS.TL, B = UV_PERMS.TR, C = UV_PERMS.BR, D = UV_PERMS.BL;
-
-            const isTriangle = v[0] === v[1];
-            if (gameNumber > 1) {
-                if (isTriangle) {
-                    const rr = (ii! >> 4) & 3;
-                    const rot = (tile.rotation - rr) & 3;
-                    const seq = [A, B, C, D];
-                    const rotated = [seq[(0 + rot) & 3], seq[(1 + rot) & 3], seq[(2 + rot) & 3], seq[(3 + rot) & 3]];
-                    [A, B, C, D] = rotated;
-                }
-            } else if (v[0] === v[1]) {
-                const p = S2_MDL_PERMS[uvPerm! & 3];
-                A = S2_MDL_BASE[p[0]];
-                B = S2_MDL_BASE[p[1]];
-                C = S2_MDL_BASE[p[2]];
-                D = S2_MDL_BASE[p[3]];
-            }
-
+            let rot = 0;
             if (isTriangle) {
-                const inverse = (gameNumber > 1) ? !!(ii! & 4) : false;
-                if (!inverse) {
-                    polygons.push({
-                        vertices: new Uint32Array([v[1], v[2], v[3]]),
-                        colors: new Uint32Array([c[1], c[2], c[3]]),
-                        uvs: [A, C, D], textureIndex, isWater, blendMode
-                    });
-                } else {
-                    polygons.push({
-                        vertices: new Uint32Array([v[3], v[2], v[1]]),
-                        colors: new Uint32Array([c[3], c[2], c[1]]),
-                        uvs: [D, C, A], textureIndex, isWater, blendMode
-                    });
-                }
+                rot = gameNumber === 1 ? -(uvFlags & 3) : tile.rotation - ((uvFlags >> 4) & 3);
+            }
+            const [A, B, C, D] = UV_ROTATIONS[rot & 3];
+            const inverse = gameNumber > 1 && (uvFlags & 4) !== 0;
+
+            const tex = { textureIndex, isWater, blendMode };
+            if (!isTriangle) {
+                polygons.push(
+                    { ...getPolygon(v, c, 0, 1, 2), uvs: [A, B, C], ...tex },
+                    { ...getPolygon(v, c, 0, 2, 3), uvs: [A, C, D], ...tex }
+                );
+            } else if (!inverse) {
+                polygons.push({ ...getPolygon(v, c, 1, 2, 3), uvs: [A, C, D], ...tex });
             } else {
-                polygons.push({
-                    vertices: new Uint32Array([v[0], v[1], v[2]]),
-                    colors: new Uint32Array([c[0], c[1], c[2]]),
-                    uvs: [A, B, C], textureIndex, isWater, blendMode
-                });
-                polygons.push({
-                    vertices: new Uint32Array([v[0], v[2], v[3]]),
-                    colors: new Uint32Array([c[0], c[2], c[3]]),
-                    uvs: [A, C, D], textureIndex, isWater, blendMode
-                });
+                polygons.push({ ...getPolygon(v, c, 3, 2, 1), uvs: [D, C, A], ...tex });
             }
         }
 
@@ -653,47 +427,6 @@ export function buildSpyroLevel(data: DataView, textures: SpyroRawTextures, game
     }
 
     return { textures, gameNumber, id, parts };
-}
-
-export function parseSpyroTextureTable(data: DataView, gameNumber: number): SpyroTextureHeader[] {
-    const count = data.getUint32(0, true);
-    const headers = new Array(count);
-    let offset = 4;
-    if (gameNumber === 1) {
-        // starts with lod-mid header pairs
-        for (let i = 0; i < count; i++) {
-            offset += 8; // skip lod header
-            const mid = buildSpyroTextureDefinition(data, offset, gameNumber);
-            offset += 8;
-            headers[i] = { mid, cor: [] };
-        }
-        // jump to high-res groups
-        offset = 4 + (16 * count);
-        for (let i = 0; i < count; i++) {
-            offset += 8; // skip spr header
-            const cor: SpyroTextureDefinition[] = Array(4);
-            for (let j = 0; j < 4; j++) {
-                cor[j] = buildSpyroTextureDefinition(data, offset, gameNumber);
-                offset += 8;
-            }
-            offset += 8 * 16; // skip sm headers
-            headers[i].cor = cor;
-        }
-    } else {
-        // sequential headers of lod-mid-cor
-        for (let i = 0; i < count; i++) {
-            offset += 8; // skip lod
-            const mid = buildSpyroTextureDefinition(data, offset, gameNumber);
-            offset += 8;
-            const cor: SpyroTextureDefinition[] = Array(4);
-            for (let j = 0; j < 4; j++) {
-                cor[j] = buildSpyroTextureDefinition(data, offset, gameNumber);
-                offset += 8;
-            }
-            headers[i] = { mid, cor };
-        }
-    }
-    return headers;
 }
 
 export function parseSpyroMobyInstances(data: ArrayBufferSlice): SpyroMobyInstance[] {
@@ -714,9 +447,6 @@ export function parseSpyroMobyInstances(data: ArrayBufferSlice): SpyroMobyInstan
         section.skip(15);
         const yaw = section.getInt8();
         section.skip(17);
-        if (x === 0 && y === 0 && z === 0) {
-            console.warn("Moby instance at origin, offset", section.offset - 88);
-        }
         instances[i] = { x, y, z, yaw, classId };
     }
 
@@ -780,7 +510,7 @@ export function parseSpyroLevelData(data: ArrayBufferSlice, isStandard: boolean)
     return { vram: new SpyroVRAM(vram), textureTable, ground, sky, mobyInstances };
 }
 
-export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number, levelNumber: number, isFlyover: boolean = false): SpyroLevelData {
+export function parseSpyroLevelData2(data: ArrayBufferSlice, gameNumber: number, levelNumber: number, isFlyover: boolean): SpyroLevelData {
     const file = new Parser(data);
 
     const subfile1 = file.getSubfile(0);
