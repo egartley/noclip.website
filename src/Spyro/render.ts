@@ -17,7 +17,7 @@ import { Destroyable } from "../SceneBase";
 import { computeViewMatrixSkybox, computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
 import { SpyroBlendMode, SpyroTexture } from "./texture";
 
-const enum ShaderFlag {
+const enum ShaderFlags {
     NONE = 0,
     TEXTURED = 1 << 0,
     WATER = 1 << 1,
@@ -31,15 +31,15 @@ const enum ShaderFlag {
 class Shader extends DeviceProgram {
     public static ub_SceneParams = 0;
 
-    constructor(flags: ShaderFlag) {
+    constructor(flags: ShaderFlags) {
         super();
-        this.setDefineBool("TEXTURED", (flags & ShaderFlag.TEXTURED) !== 0);
-        this.setDefineBool("WATER", (flags & ShaderFlag.WATER) !== 0);
-        this.setDefineBool("SCROLL", (flags & ShaderFlag.SCROLL) !== 0);
-        this.setDefineBool("ALPHA_TEST", (flags & ShaderFlag.ALPHA_TEST) !== 0);
-        this.setDefineBool("DISCARD_STP", (flags & ShaderFlag.DISCARD_STP) !== 0);
-        this.setDefineBool("DISCARD_NON_STP", (flags & ShaderFlag.DISCARD_NON_STP) !== 0);
-        this.setDefineBool("BLENDED", (flags & ShaderFlag.BLENDED) !== 0);
+        this.setDefineBool("TEXTURED", (flags & ShaderFlags.TEXTURED) !== 0);
+        this.setDefineBool("WATER", (flags & ShaderFlags.WATER) !== 0);
+        this.setDefineBool("SCROLL", (flags & ShaderFlags.SCROLL) !== 0);
+        this.setDefineBool("ALPHA_TEST", (flags & ShaderFlags.ALPHA_TEST) !== 0);
+        this.setDefineBool("DISCARD_STP", (flags & ShaderFlags.DISCARD_STP) !== 0);
+        this.setDefineBool("DISCARD_NON_STP", (flags & ShaderFlags.DISCARD_NON_STP) !== 0);
+        this.setDefineBool("BLENDED", (flags & ShaderFlags.BLENDED) !== 0);
     }
 
     public override both = `
@@ -59,11 +59,11 @@ varying vec2 v_UV;
 
 #ifdef VERT
 layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Color;
+layout(location = 1) in vec4 a_Color;
 layout(location = 2) in vec2 a_UV;
 
 void main() {
-    v_Color = a_Color;
+    v_Color = a_Color.rgb;
     v_UV = a_UV;
 
     vec3 pos = a_Position;
@@ -124,6 +124,7 @@ const BLEND_ALPHA = 0.5;
 const MEGA_STATE_ADDITIVE = makeBlendMegaState(GfxBlendMode.Add, GfxBlendFactor.SrcAlpha, GfxBlendFactor.One);
 const MEGA_STATE_AVERAGE = makeBlendMegaState(GfxBlendMode.Add, GfxBlendFactor.SrcAlpha, GfxBlendFactor.OneMinusSrcAlpha);
 const SORT_MAX_DEPTH = 0x40000;
+const UV_NONE = [0, 0];
 const BINDING_LAYOUTS: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 1 }];
 const BINDING_LAYOUTS_SKY: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 0 }];
 const NOCLIP_SPACE_CORRECTION = mat4.fromValues(
@@ -273,19 +274,100 @@ function getBlendMegaState(blend: SpyroBlendMode): Partial<GfxMegaStateDescripto
     }
 }
 
+class MeshBuilder {
+    public indices: number[] = [];
+    private positions: number[] = [];
+    private colors: number[] = [];
+    private uvs: number[] = [];
+    private vertexMap = new Map<number, number>();
+    private stride: number;
+
+    constructor(private useUVs: boolean) {
+        this.stride = this.useUVs ? 20 : 16;
+    }
+
+    public newPart(): void {
+        this.vertexMap.clear();
+    }
+
+    public addVertex(vi: number, ci: number, v: number[], c: number[], uv: number[] = UV_NONE): number {
+        const key = ((vi * 4096 + ci) * 2 + uv[0]) * 2 + uv[1];
+        let index = this.vertexMap.get(key);
+        if (index === undefined) {
+            index = this.positions.length / 3;
+            this.positions.push(v[0], v[1], v[2]);
+            this.colors.push(c[0], c[1], c[2]);
+            this.uvs.push(uv[0], uv[1]);
+            this.vertexMap.set(key, index);
+        }
+        return index;
+    }
+
+    public createVertexBuffer(device: GfxDevice): GfxVertexBufferDescriptor {
+        const vertexCount = this.positions.length / 3;
+        const data = new ArrayBuffer(vertexCount * this.stride);
+        const f32 = new Float32Array(data);
+        const u8 = new Uint8Array(data);
+        for (let i = 0; i < vertexCount; i++) {
+            const f = i * this.stride / 4;
+            f32[f] = this.positions[i * 3];
+            f32[f + 1] = this.positions[i * 3 + 1];
+            f32[f + 2] = this.positions[i * 3 + 2];
+            const b = i * this.stride + 12;
+            u8[b] = this.colors[i * 3];
+            u8[b + 1] = this.colors[i * 3 + 1];
+            u8[b + 2] = this.colors[i * 3 + 2];
+            u8[b + 3] = 255;
+            if (this.useUVs) {
+                u8[b + 4] = this.uvs[i * 2] * 255;
+                u8[b + 5] = this.uvs[i * 2 + 1] * 255;
+            }
+        }
+        return { buffer: createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, data), byteOffset: 0 };
+    }
+
+    public createIndexBuffer(device: GfxDevice): GfxIndexBufferDescriptor {
+        let data: Uint16Array | Uint32Array;
+        if (this.getIndexFormat() === GfxFormat.U16_R) {
+            data = new Uint16Array(this.indices.length + (this.indices.length & 1));
+            data.set(this.indices);
+        } else {
+            data = new Uint32Array(this.indices);
+        }
+        return { buffer: createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, data.buffer), byteOffset: 0 };
+    }
+
+    public createInputLayout(cache: GfxRenderCache): GfxInputLayout {
+        const vertexAttributeDescriptors = [
+            { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
+            { location: 1, bufferIndex: 0, format: GfxFormat.U8_RGBA_NORM, bufferByteOffset: 12 }
+        ];
+        if (this.useUVs) {
+            vertexAttributeDescriptors.push({ location: 2, bufferIndex: 0, format: GfxFormat.U8_RG_NORM, bufferByteOffset: 16 });
+        }
+        return cache.createInputLayout({
+            vertexAttributeDescriptors,
+            vertexBufferDescriptors: [{ byteStride: this.stride, frequency: GfxVertexBufferFrequency.PerVertex }],
+            indexBufferFormat: this.getIndexFormat()
+        });
+    }
+
+    private getIndexFormat(): GfxFormat {
+        return this.positions.length / 3 <= 0x10000 ? GfxFormat.U16_R : GfxFormat.U32_R;
+    }
+}
+
 class LevelMeshRenderer {
     private indexBufferDescriptor: GfxIndexBufferDescriptor;
-    private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
+    private vertexBufferDescriptor: GfxVertexBufferDescriptor;
     private inputLayout: GfxInputLayout;
-    private programs = new Map<ShaderFlag, GfxProgram>();
+    private programs = new Map<ShaderFlags, GfxProgram>();
     private passes: DrawPass[] = [];
     private passLOD: DrawPass | null = null;
 
     constructor(private cache: GfxRenderCache, parts: SpyroGroundPart[], textures: SpyroTexture[]) {
-        const vertices: number[] = [];
-        const colors: number[] = [];
-        const uvs: number[] = [];
-        const indices: number[] = [];
+        const mesh = new MeshBuilder(true);
+        const indices = mesh.indices;
 
         // part centers for depth sorting semi-transparent draw calls
         const partCenters = parts.map((part) => {
@@ -302,12 +384,12 @@ class LevelMeshRenderer {
             return vec3.transformMat4(center, center, NOCLIP_SPACE_CORRECTION);
         });
 
-        // group polygons into draw calls by texture, blend mode and water flag
+        // group by texture, blend mode and water flag
         // key = ((partKey * 128 + textureIndex) << 4) | (blend + 1) << 1 | isWater, where partKey = part index + 1 or 0 if opaque
         const groups = new Map<number, number[]>();
-        let index = 0;
         for (let partIndex = 0; partIndex < parts.length; partIndex++) {
             const part = parts[partIndex];
+            mesh.newPart();
             for (const polygon of part.polygons) {
                 const blend = polygon.blendMode ?? SpyroBlendMode.OPAQUE;
                 const partKey = blend === SpyroBlendMode.OPAQUE ? 0 : partIndex + 1;
@@ -318,12 +400,8 @@ class LevelMeshRenderer {
                     groups.set(key, group);
                 }
                 for (let i = 0; i < 3; i++) {
-                    const v = part.vlut[polygon.vertices[i]];
-                    const c = part.clut[polygon.colors[i]];
-                    vertices.push(v[0], v[1], v[2]);
-                    colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
-                    uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                    group.push(index++);
+                    const vi = polygon.vertices[i], ci = polygon.colors[i];
+                    group.push(mesh.addVertex(vi, ci, part.vlut[vi], part.clut[ci], polygon.uvs[i]));
                 }
             }
         }
@@ -350,16 +428,16 @@ class LevelMeshRenderer {
 
             const texture = textures[textureIndex];
             const bindings = samplerBindings[textureIndex];
-            let base = ShaderFlag.TEXTURED;
+            let base = ShaderFlags.TEXTURED;
             if (key & 1) {
-                base |= ShaderFlag.WATER;
+                base |= ShaderFlags.WATER;
             }
             if (texture.isScrolling) {
-                base |= ShaderFlag.SCROLL;
+                base |= ShaderFlags.SCROLL;
             }
 
             if (blendMode === SpyroBlendMode.OPAQUE) {
-                const flags = base | (texture.hasTransparentTexels ? ShaderFlag.ALPHA_TEST : 0);
+                const flags = base | (texture.hasTransparentTexels ? ShaderFlags.ALPHA_TEST : 0);
                 this.passes.push(this.makePass(flags, bindings, count, offset, null, null));
                 continue;
             }
@@ -367,18 +445,18 @@ class LevelMeshRenderer {
                 // opaque part of a semi-transparent texture
                 let flags = base;
                 if (texture.hasTransparentTexels || texture.hasStpTexels) {
-                    flags |= ShaderFlag.ALPHA_TEST;
+                    flags |= ShaderFlags.ALPHA_TEST;
                 }
                 if (texture.hasStpTexels) {
-                    flags |= ShaderFlag.DISCARD_STP;
+                    flags |= ShaderFlags.DISCARD_STP;
                 }
                 this.passes.push(this.makePass(flags, bindings, count, offset, null, null));
             }
             if (texture.hasStpTexels) {
                 // blended part of a semi-transparent texture, depth sorted by part center
-                let flags = base | ShaderFlag.BLENDED;
+                let flags = base | ShaderFlags.BLENDED;
                 if (texture.hasTransparentTexels || texture.hasOpaqueTexels) {
-                    flags |= ShaderFlag.ALPHA_TEST | ShaderFlag.DISCARD_NON_STP;
+                    flags |= ShaderFlags.ALPHA_TEST | ShaderFlags.DISCARD_NON_STP;
                 }
                 this.passes.push(this.makePass(flags, bindings, count, offset, partCenters[partKey - 1], getBlendMegaState(blendMode)));
             }
@@ -386,45 +464,26 @@ class LevelMeshRenderer {
         const indexLODOffset = indices.length;
 
         for (const part of parts) {
+            mesh.newPart();
             for (const polygon of part.polygonsLOD) {
                 for (let i = 0; i < 3; i++) {
-                    const v = part.vlutLOD[polygon.vertices[i]];
-                    const c = part.clutLOD[polygon.colors[i]].map(c => c / 255);
-                    vertices.push(v[0], v[1], v[2]);
-                    colors.push(c[0], c[1], c[2]);
-                    uvs.push(polygon.uvs[i][0], polygon.uvs[i][1]);
-                    indices.push(index++);
+                    const vi = polygon.vertices[i], ci = polygon.colors[i];
+                    indices.push(mesh.addVertex(vi, ci, part.vlutLOD[vi], part.clutLOD[ci]));
                 }
             }
         }
         const drawCountLOD = indices.length - indexLODOffset;
 
         if (drawCountLOD > 0) {
-            this.passLOD = this.makePass(ShaderFlag.NONE, null, drawCountLOD, indexLODOffset, null, null);
+            this.passLOD = this.makePass(ShaderFlags.NONE, null, drawCountLOD, indexLODOffset, null, null);
         }
 
-        this.inputLayout = cache.createInputLayout({
-            vertexAttributeDescriptors: [
-                { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
-                { location: 1, bufferIndex: 1, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
-                { location: 2, bufferIndex: 2, format: GfxFormat.F32_RG, bufferByteOffset: 0 }
-            ],
-            vertexBufferDescriptors: [
-                { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex },
-                { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex },
-                { byteStride: 8, frequency: GfxVertexBufferFrequency.PerVertex }
-            ],
-            indexBufferFormat: GfxFormat.U32_R
-        });
-        this.vertexBufferDescriptors = [
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors).buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(uvs).buffer), byteOffset: 0 }
-        ];
-        this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
+        this.inputLayout = mesh.createInputLayout(cache);
+        this.vertexBufferDescriptor = mesh.createVertexBuffer(cache.device);
+        this.indexBufferDescriptor = mesh.createIndexBuffer(cache.device);
     }
 
-    private getProgram(flags: ShaderFlag): GfxProgram {
+    private getProgram(flags: ShaderFlags): GfxProgram {
         let program = this.programs.get(flags);
         if (program === undefined) {
             program = this.cache.createProgram(new Shader(flags));
@@ -433,12 +492,12 @@ class LevelMeshRenderer {
         return program;
     }
 
-    private makePass(flags: ShaderFlag, samplerBindings: GfxSamplerBinding[] | null, count: number, offset: number, center: vec3 | null, megaState: Partial<GfxMegaStateDescriptor> | null): DrawPass {
+    private makePass(flags: ShaderFlags, samplerBindings: GfxSamplerBinding[] | null, count: number, offset: number, center: vec3 | null, megaState: Partial<GfxMegaStateDescriptor> | null): DrawPass {
         let sortKey: number;
-        if (flags & ShaderFlag.BLENDED) {
+        if (flags & ShaderFlags.BLENDED) {
             sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT);
         } else {
-            const layer = (flags & ShaderFlag.ALPHA_TEST) ? GfxRendererLayer.OPAQUE + 1 : GfxRendererLayer.OPAQUE;
+            const layer = (flags & ShaderFlags.ALPHA_TEST) ? GfxRendererLayer.OPAQUE + 1 : GfxRendererLayer.OPAQUE;
             sortKey = makeSortKey(layer, flags);
         }
         return { program: this.getProgram(flags), sortKey, megaState, samplerBindings, count, offset, center };
@@ -446,7 +505,7 @@ class LevelMeshRenderer {
 
     public prepareToRender(renderInstManager: GfxRenderInstManager, viewMatrix: mat4, lod: boolean) {
         const template = renderInstManager.pushTemplate();
-        template.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
+        template.setVertexInput(this.inputLayout, [this.vertexBufferDescriptor], this.indexBufferDescriptor);
         if (lod) {
             if (this.passLOD !== null) {
                 this.submitPass(renderInstManager, viewMatrix, this.passLOD);
@@ -477,9 +536,7 @@ class LevelMeshRenderer {
 
     public destroy(device: GfxDevice) {
         device.destroyBuffer(this.indexBufferDescriptor.buffer);
-        for (const d of this.vertexBufferDescriptors) {
-            device.destroyBuffer(d.buffer);
-        }
+        device.destroyBuffer(this.vertexBufferDescriptor.buffer);
     }
 }
 
@@ -499,10 +556,10 @@ varying vec3 v_Color;
 
 #ifdef VERT
 layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Color;
+layout(location = 1) in vec4 a_Color;
 
 void main() {
-    v_Color = a_Color;
+    v_Color = a_Color.rgb;
     gl_Position = UnpackMatrix(u_VPM) * vec4(a_Position, 1.0);
 }
 #endif
@@ -521,23 +578,17 @@ export class SpyroSkyboxRenderer implements Destroyable {
     private gfxProgram: GfxProgram;
     private megaStateFlags: GfxMegaStateDescriptor;
     private indexBufferDescriptor: GfxIndexBufferDescriptor;
-    private vertexBufferDescriptors: GfxVertexBufferDescriptor[];
+    private vertexBufferDescriptor: GfxVertexBufferDescriptor;
 
     constructor(cache: GfxRenderCache, sky: SpyroSkybox) {
-        const vertices: number[] = [];
-        const colors: number[] = [];
-        const indices: number[] = [];
-
         // combine all parts into a single mesh
-        let index = 0;
+        const mesh = new MeshBuilder(false);
         for (const part of sky.parts) {
+            mesh.newPart();
             for (const polygon of part.polygons) {
                 for (let i = 0; i < 3; i++) {
-                    const v = part.vlut[polygon.vertices[i]];
-                    const c = part.clut[polygon.colors[i]].map(c => c / 255);
-                    vertices.push(v[0], v[1], v[2]);
-                    colors.push(c[0], c[1], c[2]);
-                    indices.push(index++);
+                    const vi = polygon.vertices[i], ci = polygon.colors[i];
+                    mesh.indices.push(mesh.addVertex(vi, ci, part.vlut[vi], part.clut[ci]));
                 }
             }
         }
@@ -545,23 +596,10 @@ export class SpyroSkyboxRenderer implements Destroyable {
         this.gfxProgram = cache.createProgram(new SkyboxShader());
         this.megaStateFlags = makeMegaState({ cullMode: GfxCullMode.None, depthCompare: GfxCompareMode.Always, depthWrite: false }, defaultMegaState);
 
-        this.gfxInputLayout = cache.createInputLayout({
-            vertexAttributeDescriptors: [
-                { location: 0, bufferIndex: 0, format: GfxFormat.F32_RGB, bufferByteOffset: 0 },
-                { location: 1, bufferIndex: 1, format: GfxFormat.F32_RGB, bufferByteOffset: 0 }
-            ],
-            vertexBufferDescriptors: [
-                { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex },
-                { byteStride: 12, frequency: GfxVertexBufferFrequency.PerVertex }
-            ],
-            indexBufferFormat: GfxFormat.U32_R
-        });
-        this.drawCount = indices.length;
-        this.indexBufferDescriptor = { buffer: createBufferFromData(cache.device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, new Uint32Array(indices).buffer), byteOffset: 0 };
-        this.vertexBufferDescriptors = [
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(vertices).buffer), byteOffset: 0 },
-            { buffer: createBufferFromData(cache.device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, new Float32Array(colors).buffer), byteOffset: 0 }
-        ];
+        this.drawCount = mesh.indices.length;
+        this.gfxInputLayout = mesh.createInputLayout(cache);
+        this.vertexBufferDescriptor = mesh.createVertexBuffer(cache.device);
+        this.indexBufferDescriptor = mesh.createIndexBuffer(cache.device);
     }
 
     public prepareToRender(renderHelper: GfxRenderHelper, viewerInput: ViewerRenderInput) {
@@ -581,15 +619,13 @@ export class SpyroSkyboxRenderer implements Destroyable {
         mat4.mul(SCRATCH_VIEW, SCRATCH_VIEW, NOCLIP_SPACE_CORRECTION);
         offs += fillMatrix4x4(d, offs, SCRATCH_VIEW);
 
-        renderInst.setVertexInput(this.gfxInputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
+        renderInst.setVertexInput(this.gfxInputLayout, [this.vertexBufferDescriptor], this.indexBufferDescriptor);
         renderInst.setDrawCount(this.drawCount);
         renderHelper.renderInstManager.submitRenderInst(renderInst);
     }
 
     public destroy(device: GfxDevice) {
         device.destroyBuffer(this.indexBufferDescriptor.buffer);
-        for (const d of this.vertexBufferDescriptors) {
-            device.destroyBuffer(d.buffer);
-        }
+        device.destroyBuffer(this.vertexBufferDescriptor.buffer);
     }
 }
