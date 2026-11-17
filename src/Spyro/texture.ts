@@ -27,10 +27,12 @@ export class SpyroTexture {
     public gfxTexture: GfxTexture;
     public hasOpaqueTexels: boolean = false;
     public hasStpTexels: boolean = false;
+    public hasTransparentTexels: boolean = false;
 
     constructor(device: GfxDevice, rgba: Uint8Array[], header: SpyroTextureHeader, i: number, public isScrolling: boolean) {
         this.hasOpaqueTexels = hasTexelClass(rgba, TEXEL_ALPHA_OPAQUE);
         this.hasStpTexels = hasTexelClass(rgba, TEXEL_ALPHA_STP);
+        this.hasTransparentTexels = hasTexelClass(rgba, TEXEL_ALPHA_TRANSPARENT);
 
         const s = header.cor === undefined ? 32 : 64;
         this.gfxTexture = device.createTexture({

@@ -83,6 +83,7 @@ class Renderer implements SceneGfx {
     }
 
     public render(device: GfxDevice, viewerInput: ViewerRenderInput): void {
+        this.prepareToRender(viewerInput);
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, opaqueBlackFullClearRenderPassDescriptor);
         mainColorDesc.clearColor = { r: this.clearColor[0], g: this.clearColor[1], b: this.clearColor[2], a: 1 };
@@ -102,7 +103,6 @@ class Renderer implements SceneGfx {
         }
         this.renderHelper.antialiasingSupport.pushPasses(builder, viewerInput, mainColorTargetID);
         builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
-        this.prepareToRender(viewerInput);
         builder.execute();
         this.renderInstListMain.reset();
     }
